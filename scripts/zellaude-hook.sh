@@ -963,14 +963,20 @@ persist_root_state() {
                 else $current.rainbow_mode_marker
                 end
               )
-            # null means "not captured", never "captured as nothing". A launch
-            # environ is fixed at exec, so a later null is stale, not an update.
-            | .launch_env = (
-                if $current.launch_env == null
-                then $previous.launch_env
-                else $current.launch_env
-                end
-              )
+          else
+            $current
+          end
+        # These two keep $previous on any event, SessionStart included: a
+        # SessionStart is the authoritative new signal for rainbow_name, but an
+        # environ is fixed at exec, so within one session a null is only ever a
+        # failed read — never a newer, better answer.
+        | if $previous.session_id == $current.session_id then
+            .launch_env = (
+              if $current.launch_env == null
+              then $previous.launch_env
+              else $current.launch_env
+              end
+            )
             | .current_effort_level = (
                 if $current.current_effort_level == null
                 then $previous.current_effort_level
@@ -978,7 +984,7 @@ persist_root_state() {
                 end
               )
           else
-            $current
+            .
           end
       ' "$cache_path" 2>/dev/null
     ) || merged_payload=""
