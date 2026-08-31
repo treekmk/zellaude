@@ -8,6 +8,10 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 
 mkdir -p "$TEST_DIR/bin"
 mkdir -p "$TEST_DIR/runtime"
+# The hook reads the launch-env allowlist from the settings file under HOME, so
+# without this the developer's own zellaude.json decides what these cases see.
+mkdir -p "$TEST_DIR/home"
+export HOME="$TEST_DIR/home"
 cat > "$TEST_DIR/bin/zellij" <<'FAKE_ZELLIJ'
 #!/usr/bin/env bash
 printf '%s' "${!#}" > "$ZELLAUDE_TEST_CAPTURE"

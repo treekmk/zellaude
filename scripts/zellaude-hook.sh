@@ -308,24 +308,62 @@ LAUNCH_ENV_SAFE_SECRET_VALUE="local"
 LAUNCH_ENV_REDACTED_MARKER="<set>"
 
 PROC_ROOT=${ZELLAUDE_PROC_ROOT:-/proc}
+# Read here for the allowlist and below for the notification mode.
+SETTINGS_FILE="${HOME:-}/.config/zellij/plugins/zellaude.json"
+
+# Built-in names plus the user's, as {config: [...], secret: [...]}. A settings
+# file may only ADD: re-tiering a predefined name is dropped, and the escape set
+# is not readable from here at all, which is the cheaper door to the same
+# boundary. Missing, unreadable or malformed yields the built-ins — a bad file
+# must never capture more, and never capture nothing.
+merged_launch_env_names() {
+  local settings_json
+  settings_json=$(cat "$SETTINGS_FILE" 2>/dev/null) || settings_json=""
+
+  jq -nc \
+    --arg config_names "$LAUNCH_ENV_CONFIG_NAMES" \
+    --arg secret_names "$LAUNCH_ENV_SECRET_NAMES" \
+    --arg settings_json "$settings_json" '
+      ($settings_json | fromjson? // {}) as $user
+      | ($config_names | split(" ")) as $config
+      | ($secret_names | split(" ")) as $secret
+      | ($config + $secret) as $predefined
+      # The config tier is spelled "verbatim" to the user: the frozen-tier rule
+      # protects predefined names only, so a name they add there is captured
+      # WITH ITS VALUE, and the key should say so.
+      | def added($tier):
+          (try ($user.launch_env_names[$tier]) catch null)
+          | if type == "array"
+            then map(select(type == "string" and . != ""))
+            else []
+            end;
+        ((added("secret") - $predefined) | unique) as $user_secret
+      # A name the user lists under both tiers is a secret: fail closed.
+      | ((added("verbatim") - $predefined - $user_secret) | unique) as $user_config
+      | {
+          config: ($config + $user_config),
+          secret: ($secret + $user_secret)
+        }
+    '
+}
 
 # Emits the launch_env object, or nothing when the environ cannot be read
 # (no /proc, refused read, no agent pid). Never falls back to this hook's own
 # environment: under --inspect that belongs to zellaude-attach.sh, not the agent.
 # jq splits the raw NUL-separated blob so a value containing a newline survives.
 read_launch_env() {
-  local agent_pid=$1 environ_path
+  local agent_pid=$1 environ_path names
   [ -n "$agent_pid" ] || return 1
   environ_path="$PROC_ROOT/$agent_pid/environ"
   [ -r "$environ_path" ] || return 1
+  names=$(merged_launch_env_names) || return 1
 
   jq -Rsc \
-    --arg config_names "$LAUNCH_ENV_CONFIG_NAMES" \
-    --arg secret_names "$LAUNCH_ENV_SECRET_NAMES" \
+    --argjson names "$names" \
     --arg safe_secret_value "$LAUNCH_ENV_SAFE_SECRET_VALUE" \
     --arg redacted_marker "$LAUNCH_ENV_REDACTED_MARKER" '
-      ($config_names | split(" ")) as $config
-      | ($secret_names | split(" ")) as $secret
+      $names.config as $config
+      | $names.secret as $secret
       | [ split("\u0000")[]
           | (index("=")) as $eq
           | select($eq != null)
@@ -1027,7 +1065,6 @@ if [ "$HOOK_EVENT" = "PermissionRequest" ]; then
   printf '\a' > /dev/tty 2>/dev/null || true
 
   # Read notification setting (default: Always)
-  SETTINGS_FILE="$HOME/.config/zellij/plugins/zellaude.json"
   NOTIFY_MODE="Always"
   if [ -f "$SETTINGS_FILE" ]; then
     NOTIFY_MODE=$(jq -r '.notifications // "Always"' "$SETTINGS_FILE" 2>/dev/null)
