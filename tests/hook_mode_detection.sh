@@ -493,4 +493,181 @@ jq -e --argjson mode_ts "$LAUNCH_OVERRIDE_MODE_TS" '
 run_inline_settings_flag '{"ultracode":true}' true
 run_inline_settings_flag '{"ultracode":false,"other":true}' false
 
+# --- launch environment capture ---------------------------------------------
+
+# find_agent_pid matches on comm, and a shebang script reports comm=bash, so the
+# stand-in agent must be a copy of the bash binary named for the client. Kept
+# off PATH: these names would otherwise shadow a real client for other cases.
+LAUNCH_ENV_BIN="$TEST_DIR/launch-bin"
+LAUNCH_ENV_PROC_ROOT="$TEST_DIR/launch-proc"
+LAUNCH_ENV_ENVIRON="$TEST_DIR/launch-environ"
+LAUNCH_ENV_STDOUT="$TEST_DIR/launch-stdout.json"
+mkdir -p "$LAUNCH_ENV_BIN" "$LAUNCH_ENV_PROC_ROOT"
+cp "$(command -v bash)" "$LAUNCH_ENV_BIN/claude"
+cp "$(command -v bash)" "$LAUNCH_ENV_BIN/codex"
+
+# The agent publishes its own environ, because only it knows the pid that
+# find_agent_pid will resolve to. An empty fixture publishes nothing, which is
+# how the not-captured path is reached.
+cat > "$TEST_DIR/launch-agent.sh" <<'LAUNCH_AGENT'
+if [ -s "$ZELLAUDE_TEST_ENVIRON" ]; then
+  mkdir -p "$ZELLAUDE_PROC_ROOT/$$"
+  cp "$ZELLAUDE_TEST_ENVIRON" "$ZELLAUDE_PROC_ROOT/$$/environ"
+fi
+printf '%s' "$ZELLAUDE_TEST_INPUT" |
+  "$ZELLAUDE_TEST_HOOK" ${ZELLAUDE_TEST_HOOK_ARGS:-}
+LAUNCH_AGENT
+
+write_environ() {
+  local entry
+  : > "$LAUNCH_ENV_ENVIRON"
+  for entry in "$@"; do
+    printf '%s\0' "$entry" >> "$LAUNCH_ENV_ENVIRON"
+  done
+}
+
+run_launch_env_hook() {
+  local client=$1 input=$2 hook_args=""
+  shift 2
+  [ "$client" != "codex" ] || hook_args="--client codex"
+
+  : > "$CAPTURE_FILE"
+  env -u CLAUDE_EFFORT \
+    -u CLAUDE_CODE_EFFORT_LEVEL \
+    -u ZELLAUDE_CLAUDE_MODE \
+    PATH="$TEST_DIR/bin:$PATH" \
+    XDG_RUNTIME_DIR="$TEST_DIR/runtime" \
+    ZELLIJ_SESSION_NAME="test-session" \
+    ZELLIJ_PANE_ID="7" \
+    ZELLAUDE_TEST_CAPTURE="$CAPTURE_FILE" \
+    ZELLAUDE_TEST_HOOK="$PROJECT_DIR/scripts/zellaude-hook.sh" \
+    ZELLAUDE_TEST_HOOK_ARGS="$hook_args" \
+    ZELLAUDE_TEST_INPUT="$input" \
+    ZELLAUDE_TEST_ENVIRON="$LAUNCH_ENV_ENVIRON" \
+    ZELLAUDE_PROC_ROOT="$LAUNCH_ENV_PROC_ROOT" \
+    "$@" \
+    "$LAUNCH_ENV_BIN/$client" "$TEST_DIR/launch-agent.sh" > "$LAUNCH_ENV_STDOUT"
+}
+
+rm -f "$STATE_FILE"
+write_environ \
+  'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' \
+  'ANTHROPIC_AUTH_TOKEN=local' \
+  'ANTHROPIC_API_KEY=not-a-real-key' \
+  'CLAUDE_CODE_EFFORT_LEVEL=high' \
+  'ANTHROPIC_BASE_URL_EXTRA=prefix-trap' \
+  'CLAUDE_CODE_BRIDGE_SESSION_ID=injected' \
+  'PATH=/usr/bin'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env","hook_event_name":"SessionStart"}'
+# Config names verbatim, secrets by tier, and the whole key set: an exact-name
+# allowlist cannot leak by construction, so what is worth asserting is that the
+# reader captured nothing beyond its list.
+jq -e '
+  .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
+  and .launch_env.ANTHROPIC_AUTH_TOKEN == "local"
+  and .launch_env.ANTHROPIC_API_KEY == "<set>"
+  and .launch_env.CLAUDE_CODE_EFFORT_LEVEL == "high"
+  and (.launch_env | keys) == [
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_EFFORT_LEVEL"
+  ]
+' "$CAPTURE_FILE" >/dev/null
+if grep -q 'not-a-real-key' "$CAPTURE_FILE" "$STATE_FILE"; then
+  printf 'a secret value reached the payload or the cache\n' >&2
+  exit 1
+fi
+
+# A launch environ is fixed at exec, so within one session a null is a failed
+# read, never a newer answer — it must not erase a capture, on any event.
+# Anything non-null still lands, or the guard would be a blanket keep-previous.
+write_environ
+run_launch_env_hook claude \
+  '{"session_id":"launch-env","hook_event_name":"PostToolUse"}' \
+  CLAUDE_EFFORT=max
+jq -e '.launch_env == null and .current_effort_level == "max"' \
+  "$CAPTURE_FILE" >/dev/null
+jq -e '
+  .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
+  and .current_effort_level == "max"
+' "$STATE_FILE" >/dev/null
+
+# The two merge rules coexist rather than one swallowing the other: a
+# SessionStart is the authoritative new signal for rainbow_name, and in the same
+# event the launch fields still keep what a failed read could not supply.
+run_launch_env_hook claude \
+  '{"session_id":"launch-env","hook_event_name":"SessionStart"}'
+jq -e '
+  .rainbow_name == null
+  and .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
+  and .current_effort_level == "max"
+' "$STATE_FILE" >/dev/null
+
+XDG_RUNTIME_DIR="$TEST_DIR/runtime" \
+  "$PROJECT_DIR/scripts/zellaude-hook.sh" --restore test-session |
+  jq -e '
+    .session_id == "launch-env"
+    and (has("launch_env") | not)
+    and .current_effort_level == "max"
+  ' >/dev/null
+
+# A different session inherits nothing: the previous agent's environ is not this
+# agent's, however recently it was cached.
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-other","hook_event_name":"SessionStart"}'
+jq -e '.launch_env == null and .current_effort_level == null' \
+  "$STATE_FILE" >/dev/null
+
+# Read but nothing matched is not the same as never read.
+write_environ 'PATH=/usr/bin'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-empty","hook_event_name":"SessionStart"}'
+jq -e '.launch_env == {}' "$CAPTURE_FILE" >/dev/null
+
+# --inspect runs outside the agent's process tree, so the environment reachable
+# there is the caller's, not the agent's — null even when a readable environ and
+# a resolvable agent_pid would otherwise produce a capture.
+write_environ 'ANTHROPIC_BASE_URL=http://127.0.0.1:9/'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-inspect","hook_event_name":"PostToolUse"}' \
+  ZELLAUDE_TEST_HOOK_ARGS=--inspect
+jq -e '.launch_env == null and (.agent_pid | type) == "number"' \
+  "$LAUNCH_ENV_STDOUT" >/dev/null
+
+# Every effort source is normalized, so an uppercase CLAUDE_EFFORT reaches the
+# payload lowercased and takes the explicit-effort early return instead of
+# falling through to the transcript's ultracode state.
+write_environ
+run_launch_env_hook claude "$(jq -nc \
+  --arg transcript "$CLAUDE_ULTRA_TRANSCRIPT" \
+  '{session_id:"launch-env-effort",hook_event_name:"PreToolUse",transcript_path:$transcript}')" \
+  CLAUDE_EFFORT=HIGH
+jq -e '.current_effort_level == "high" and .rainbow_name == false' \
+  "$CAPTURE_FILE" >/dev/null
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-effort","hook_event_name":"PostToolUse","effort":{"level":"MAX"}}' \
+  CLAUDE_EFFORT=high
+jq -e '.current_effort_level == "max"' "$CAPTURE_FILE" >/dev/null
+
+# The asymmetry on a codex pane is deliberate, and the two halves are asserted
+# together so it cannot be tidied away: an inherited ANTHROPIC_BASE_URL was
+# genuinely in this process's environ at exec, while an inherited CLAUDE_EFFORT
+# would assert a Claude session's effort about a codex agent.
+write_environ \
+  'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' \
+  'CODEX_HOME=/tmp/codex-home' \
+  'CODEX_API_KEY=not-a-real-key'
+run_launch_env_hook codex \
+  '{"session_id":"launch-env-codex","hook_event_name":"PreToolUse"}' \
+  CLAUDE_EFFORT=high
+jq -e '
+  .client == "codex"
+  and .current_effort_level == null
+  and .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
+  and .launch_env.CODEX_HOME == "/tmp/codex-home"
+  and .launch_env.CODEX_API_KEY == "<set>"
+' "$CAPTURE_FILE" >/dev/null
+
 printf 'hook mode detection tests passed\n'
