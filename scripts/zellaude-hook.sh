@@ -324,6 +324,8 @@ merged_launch_env_names() {
     --arg config_names "$LAUNCH_ENV_CONFIG_NAMES" \
     --arg secret_names "$LAUNCH_ENV_SECRET_NAMES" \
     --arg settings_json "$settings_json" '
+      # No apostrophe in a comment inside a single-quoted jq program: it closes
+      # the shell string, and bash -n then reports a syntax error lines below.
       ($settings_json | fromjson? // {}) as $user
       | ($config_names | split(" ")) as $config
       | ($secret_names | split(" ")) as $secret

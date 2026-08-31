@@ -497,8 +497,6 @@ jq -e --argjson mode_ts "$LAUNCH_OVERRIDE_MODE_TS" '
 run_inline_settings_flag '{"ultracode":true}' true
 run_inline_settings_flag '{"ultracode":false,"other":true}' false
 
-# --- launch environment capture ---------------------------------------------
-
 # find_agent_pid matches on comm, and a shebang script reports comm=bash, so the
 # stand-in agent must be a copy of the bash binary named for the client. Kept
 # off PATH: these names would otherwise shadow a real client for other cases.
@@ -674,8 +672,6 @@ jq -e '
   and .launch_env.CODEX_API_KEY == "<set>"
 ' "$CAPTURE_FILE" >/dev/null
 
-# --- user-extended allowlist ------------------------------------------------
-
 LAUNCH_ENV_SETTINGS="$HOME/.config/zellij/plugins/zellaude.json"
 mkdir -p "$(dirname "$LAUNCH_ENV_SETTINGS")"
 
@@ -687,9 +683,9 @@ write_settings() {
   fi
 }
 
-# The names T9 added, and the regression test for a hook that reads the settings
-# file on every event: with no file at all the built-ins must still be the whole
-# list, or the suite has gone back to reading whoever runs it.
+# The built-ins are the whole list when no settings file exists — the regression
+# test for a hook that now reads that file on every event, or the suite has gone
+# back to reading whoever runs it.
 write_settings
 write_environ \
   'CODEX_SQLITE_HOME=/tmp/codex-sqlite' \
