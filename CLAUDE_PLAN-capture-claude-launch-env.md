@@ -4,14 +4,16 @@ Record each agent's launch environment in the per-pane state cache so relaunch t
 reproduce it instead of silently reaching the default Anthropic endpoint. The hook gains two payload
 fields: `launch_env`, read from the agent's own `/proc/<agent_pid>/environ` against one client-agnostic
 allowlist of exact variable names, and `current_effort_level`, resolved through the precedence the hook
-already uses. Secret-named variables record a marker, not their value, with one literal escape.
+already uses. Secret-named variables record a marker, not their value, with one literal escape. A settings file may
+extend the allowlist by adding names; the two tiers and the escape set are frozen in code.
 
 **Context**
 Env-prefixed launches (`ANTHROPIC_BASE_URL=… ANTHROPIC_AUTH_TOKEN=… claude --effort xhigh`, an abbr for
 per-session backends) are invisible to the cache: it proves identity (`session_id`, `cwd`, `agent_pid`)
-but records nothing about how the agent started, so any relaunch reaches the default endpoint. Capture
-alone changes nothing user-visible — the value arrives with the replay half,
-`feature/zellmv-faithful-resume` in my-terminal-setup. This is the producer side of that contract.
+but records nothing about how the agent started, so any relaunch reaches the default endpoint. The capture half is invisible on its own — its
+value arrives with the replay half, `feature/zellmv-faithful-resume` in my-terminal-setup, and this is
+the producer side of that contract. The user-extensible allowlist added by revision IS user-visible,
+which is why this feature owes README documentation (T13) that the original scope did not.
 Branch `feature/capture-claude-launch-env`; the merge task merges in `develop`.
 Mode: ask
 
@@ -21,7 +23,14 @@ Mode: ask
 - Phase 2 (T3): wire both fields into `PAYLOAD`, guard them in the `persist_root_state` merge, strip
   `launch_env` from the `--restore` output.
 - Phase 3 (T4): fixture-driven tests over both capture paths, the secret policy, and the merge guard.
-- T3 needs T1 and T2; T4 needs T3. T1–T3 edit one file and are strictly sequential.
+- Phase 4 (T9–T11, added by revision): extend the allowlist with the residual codex names, then make it
+  user-extensible from `zellaude.json` under the frozen-tier rule, with tests for both. T12 records two
+  planner-ordered amendments that landed under chat orders while impl1 was mid-run.
+- Phase 5 (T13): document the new settings key in the README — the expansion gives this feature a
+  user-facing surface it did not have.
+- T3 needs T1 and T2; T4 needs T3; T9 needs T4; T10 needs T9; T11 and T13 need T10. Every row above edits
+  one of three files — the hook, its test suite, and the README — and is strictly sequential on one
+  agent.
 
 **Relevant files**
 - `scripts/zellaude-hook.sh` — the whole change: allowlist + reader near `find_agent_pid`, the extracted
@@ -29,6 +38,9 @@ Mode: ask
   `restore_cached_states`.
 - `tests/hook_mode_detection.sh` — the harness already runs the real hook with a fake `zellij` capturing
   `PAYLOAD`; new payload-field cases belong beside it.
+- `README.md` — the user-facing surface the expansion creates. The allowlist is a hand-edited
+  `zellaude.json` key, not a menu toggle, so it documents alongside **Custom states** and **Session
+  templates**, not in the Settings table of bar-menu options.
 - `tests/attach_detection.sh` — reference only. Source of the `write_environ` fixture idiom (`:21-27`)
   and the `ZELLAUDE_PROC_ROOT` seam (`:7,:122`).
 - `scripts/zellaude-attach.sh` — reference only. `proc_env_value` (`:21-25`) is the in-repo precedent for
@@ -46,7 +58,8 @@ Mode: ask
 # Exact names, client-agnostic, two tiers. No prefix matching and no denylist: an injected
 # variable is excluded by not appearing here.
 LAUNCH_ENV_CONFIG_NAMES="ANTHROPIC_BASE_URL ANTHROPIC_MODEL CLAUDE_CODE_USE_BEDROCK \
-CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL ZELLAUDE_CLAUDE_MODE CODEX_HOME"  # verbatim
+CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL ZELLAUDE_CLAUDE_MODE CODEX_HOME \
+CODEX_SQLITE_HOME OPENAI_BASE_URL"                             # value captured verbatim
 LAUNCH_ENV_SECRET_NAMES="ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CODEX_API_KEY OPENAI_API_KEY"
 LAUNCH_ENV_SAFE_SECRET_VALUE="local"   # literal set, never a pattern — see Decisions
 LAUNCH_ENV_REDACTED_MARKER="<set>"     # records that a secret was present, not its value
@@ -60,14 +73,19 @@ read_launch_env() { : "$1"; }          # $1 = agent pid
 
 # The single resolution of the agent's current effort, used by BOTH the payload field and
 # detect_claude_rainbow. Precedence is the repo's own: stdin .effort.level, then CLAUDE_EFFORT.
-resolve_effort_level() { :; }
+resolve_effort_level() { :; }   # downcases BOTH sources — see Decisions
+
+# Built-in lists merged with the user's, per the frozen-tier rule in Decisions.
+# A missing, unreadable or malformed settings file yields the built-ins unchanged.
+merged_launch_env_names() { :; }
 ```
 
 New payload fields:
 
 ```
 launch_env            object | null   # null = not captured; {} = captured, nothing matched
-current_effort_level  string | null   # effort as of this event's ts_ms, NOT launch-time
+current_effort_level  string | null   # effort as of this event's ts_ms, NOT launch-time;
+                                      # always null for CLIENT=codex — see Decisions
 ```
 
 - `current_effort_level` departs from the seed's `effort_level` deliberately. Beside `launch_env` a bare
@@ -94,19 +112,27 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
      this box uses is never written.
   3. Start an isolated Zellij session named `zellaude-e2e-launchenv` (preflight: it must not already
      exist) and run one pane under a **controlled** environment — the environment is what this feature
-     measures, so it cannot be left ambient. Unset every allowlisted name, then set only the four the
+     measures, so it cannot be left ambient. Unset every allowlisted name, then set only the names the
      case needs, the idiom `tests/hook_mode_detection.sh:36-38` already uses:
-     `env -u ANTHROPIC_MODEL -u CLAUDE_CODE_USE_BEDROCK -u CLAUDE_CODE_USE_VERTEX -u ZELLAUDE_CLAUDE_MODE`
-     `-u CODEX_HOME -u CODEX_API_KEY -u OPENAI_API_KEY -u CLAUDE_EFFORT`
+     `env -u` **every** allowlisted name the case does not set, plus `CLAUDE_EFFORT`. Standing rule,
+     stated so it survives the next row that extends the list: *every allowlisted name is either set by
+     the E2E or unset by it — none left ambient.* A count would go stale; this does not.
      `HOME=$ZELLAUDE_E2E/home XDG_RUNTIME_DIR=$ZELLAUDE_E2E/runtime`
      `ANTHROPIC_BASE_URL=http://127.0.0.1:9/ ANTHROPIC_AUTH_TOKEN=local`
-     `ANTHROPIC_API_KEY=e2e-not-a-real-key CLAUDE_CODE_EFFORT_LEVEL=high claude --effort high -p hi`.
+     `ANTHROPIC_API_KEY=e2e-not-a-real-key CLAUDE_CODE_EFFORT_LEVEL=high`
+     `ANTHROPIC_CUSTOM_HEADERS=e2e-extends claude --effort high -p hi`.
      Not `env -i`: that would also wipe `ZELLIJ_SESSION_NAME` and `ZELLIJ_PANE_ID`, which the hook
      requires and exits on (`:263-264`). `HOME` must be the staged one — the installer registers the hook as the
      literal `${HOME}/.config/zellij/plugins/zellaude-hook.sh` (`install-hooks.sh:15`), so this is what
      makes Claude Code invoke the branch's script rather than the live one. The unroutable base URL is
      deliberate: `SessionStart` fires, the request dies immediately, **no API quota is spent**.
-  4. Read `$ZELLAUDE_E2E/runtime/zellaude-$(id -u)/zellaude-e2e-launchenv.<pane>.json`. Staging
+  4. Stage `$ZELLAUDE_E2E/home/.config/zellij/plugins/zellaude.json` carrying (a) `ANTHROPIC_CUSTOM_HEADERS`
+     added to the config tier — a real vendor variable deliberately NOT in the built-in list, which the
+     launch line also sets to `e2e-extends` — and (b) an attempt to demote `ANTHROPIC_API_KEY` to the
+     config tier. (a) proves the merge extends; (b) proves the frozen-tier rule holds under a
+     *hostile* config, which is the half the design was chosen for — and it needs no new assertion,
+     because the existing `ANTHROPIC_API_KEY == "<set>"` check becomes that proof.
+  5. Read `$ZELLAUDE_E2E/runtime/zellaude-$(id -u)/zellaude-e2e-launchenv.<pane>.json`. Staging
      `XDG_RUNTIME_DIR` is what makes this path deterministic: `state_cache_dir` (`:48-78`) only uses it
      when it is absolute and passes `is_owned_private_parent`, and otherwise silently falls back to
      `$HOME/.cache/zellaude/runtime`. Do not assume the branch — if the file is not there, look in the
@@ -117,8 +143,13 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
     `.launch_env.ANTHROPIC_API_KEY == "<set>"` (the redaction the escape is an escape *from* — the
     headline security decision, otherwise never crossed end to end);
     `.launch_env.CLAUDE_CODE_EFFORT_LEVEL == "high"` (config-tier capture);
+    `.launch_env.ANTHROPIC_CUSTOM_HEADERS == "e2e-extends"` (the merge extends — a name captured ONLY
+    because the staged config added it);
     `(.launch_env | keys) == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",`
-    `"CLAUDE_CODE_EFFORT_LEVEL"]` — the whole key set, not a spot check. An exact-name allowlist cannot
+    `"ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_EFFORT_LEVEL"]` — the whole key set, not a spot check.
+    **Invariant, stated so a missing edit surfaces here rather than at run time: the expected key set IS
+    exactly the set of allowlisted names step 3 sets.** Change either and the other is wrong; a literal
+    list alone cannot say that. An exact-name allowlist cannot
     leak an injected variable by construction, so asserting one is absent proves nothing; asserting the
     set catches the failure that *is* possible, a reader capturing more than it should. This strictness
     is only sound because step 3 controls the environment.
@@ -169,18 +200,38 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
   reproduces codex routing as `ANTHROPIC_BASE_URL` reproduces Claude's — `zellaude-attach.sh:160`
   already reads it for that reason.
 - **Null must not overwrite a capture:** `persist_root_state` rebuilds from `$current` and patches back
-  only `rainbow_*`, so a `null` in either new field erases a good one. Both follow the rule
-  `rainbow_name` already uses — on a matching `session_id`, a null `$current` keeps `$previous`. It
+  only `rainbow_*`, so a `null` in either new field erases a good one. On a matching `session_id`, a null `$current` keeps `$previous`
+  — **independent of `hook_event`**. `rainbow_name`'s version of this rule excludes `SessionStart`,
+  and that carve-out must NOT be copied: for `rainbow_name` a `SessionStart` genuinely is the
+  authoritative new signal, but a launch environ is fixed at exec, so within one `session_id` there is
+  no newer, better `launch_env` — a null is only ever a failed read. (An earlier draft said "follow the
+  rule `rainbow_name` already uses"; that shorthand imported a carve-out contradicting the very reason
+  stated here, and a second `SessionStart` with a failed read would have wiped a good capture.) It
   matters most for `launch_env`: a launch environ is fixed at exec, so a later null is always
   stale-wrong rather than a legitimate update, and `null` means "not captured", which must not become a
   lie about a pane captured moments earlier. Contradicts the seed's claim that the merge already keeps
   the fields; it does not.
 - **Effort precedence resolved once:** `.effort.level` from stdin, then `CLAUDE_EFFORT` — the precedence
-  already at `zellaude-hook.sh:687-688`, extracted into `resolve_effort_level` and shared. Today's copy
-  sits behind early returns inside `detect_claude_rainbow` and is out of scope when `PAYLOAD` is built;
-  resolving it again would let one process answer the same question two ways. This makes the change
-  wider than the seed's footprint implied. The env fallback is load-bearing: `.effort` does not ride
-  every event type, so a stdin-only value would arrive `null` on `SessionStart` — destructive per above.
+  the repo already used, extracted from `detect_claude_rainbow` into `resolve_effort_level` and shared
+  by both callers. It had sat behind early returns inside that function, out of scope when `PAYLOAD` is
+  built, so resolving it a second time there would have let one process answer the same question two
+  ways. This makes the change wider than the seed's footprint implied. The env fallback is
+  load-bearing: `.effort` does not ride every event type, so a stdin-only value would arrive `null` on `SessionStart` — destructive per above.
+- **`current_effort_level` is null for codex:** `resolve_effort_level` reads `.effort.level` (a Claude
+  hook field) and `CLAUDE_EFFORT` (a Claude env var); codex effort lives in the transcript's
+  `turn_context`, which is why `detect_codex_rainbow` is a separate path. On a codex pane the resolver
+  is reading the wrong instrument, and since Claude Code exports `CLAUDE_EFFORT` to its children, a
+  codex pane launched from such a shell would record another agent's effort — telling the consumer to
+  replay a flag that was never codex's. Null is honest; a value there is confidently wrong. Subagents
+  are deliberately not guarded: the parent's effort is genuinely theirs, and `persist_root_state`
+  returns early for them, so it never reaches the cache.
+- **Effort values are normalized:** `resolve_effort_level` downcases both sources. The hook already
+  normalizes effort everywhere else — `.effort.level`, `.launch_effort_level`, the codex transcript
+  efforts, and `CLAUDE_CODE_EFFORT_LEVEL` via `tr` one line away — leaving `CLAUDE_EFFORT` the only
+  unnormalized source, which is a latent inconsistency rather than a decision. Accepted consequence:
+  an uppercase `CLAUDE_EFFORT` now hits `detect_claude_rainbow`'s "explicit non-xhigh effort" guard
+  instead of falling through to transcript detection. That fallthrough was accidental; the repo applies
+  that guard case-insensitively at every other source.
 - **`null` vs `{}`:** `null` means the environ could not be read; `{}` means it was read and nothing
   matched. Free, and it tells the consumer whether to trust the absence.
 - **Not captured means not captured:** one branch covers `/proc` absent (macOS), the read refused, and
@@ -194,7 +245,25 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
   (`HookPayload` has no `deny_unknown_fields`) and the consumer reads the cache files directly.
 - **`ZELLAUDE_PROC_ROOT` in the hook:** mirrors `zellaude-attach.sh:12` so the capture path is testable
   from a fixture tree instead of a live agent. `/proc/<pid>/environ` is fixed at exec, so the per-event
-  read recomputes an identical result; one file read plus one `jq` is accepted on the hot path rather
-  than adding a cache-validity scheme.
-- **Not made configurable:** the allowlist is hardcoded, not read from `zellaude.json`. One visible list
-  was the request; a settings surface was not, and would need its own validation and precedence rules.
+  read recomputes an identical result; the per-event cost is now TWO file reads plus their `jq`
+  invocations — the environ and the settings file, which moves from the rare `PermissionRequest` branch
+  to every payload-building event. Accepted rather than cached: the hook already runs many `jq`
+  invocations per event, and a cache-validity scheme would have to solve staleness against a file the
+  user edits by hand.
+- **Configurable by extension only; the tiers are frozen:** a settings file may ADD names, saying which
+  list each addition joins. It can never re-tier a predefined name, and it can never touch the escape
+  set. Both halves of the boundary are code-level facts, fixed at runtime. The escape set matters as
+  much as the tiers: a config that could add a safe value would write verbatim secrets for every
+  secret-tier name without touching a tier at all — the same boundary through a cheaper door. The
+  PLAN's own reasoning settles it: if a pattern is too risky because it would eventually match a real
+  credential, a user-supplied value carries that risk with less review.
+- **A bad settings file is ignored:** missing, unreadable, or malformed yields the built-in lists
+  unchanged — fail-safe. Never fail-open (silently capturing more) and never fail-dead (capturing
+  nothing). The repo answers this the same way twice: the `zellaude.json` read falls back to a built-in
+  default, and `Settings` is `#[serde(default)]`.
+- **Narrowing is intentional, and is the null rule's sibling:** a user who removes a name mid-session
+  produces a smaller, non-null object, which the merge takes wholesale — so a richer capture is
+  replaced by a poorer one without passing through null. That is correct and deliberate: the config is
+  a redaction control, so a name the user just removed must not survive in the cache. Written down
+  because a reader who has just absorbed "null never overwrites a capture" will otherwise read a
+  shrinking `launch_env` as the bug it is not.
