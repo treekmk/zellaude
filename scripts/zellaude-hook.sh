@@ -288,6 +288,55 @@ find_agent_pid() {
 AGENT_PID=$(find_agent_pid) || AGENT_PID=""
 AGENT_HOST=$(hostname 2>/dev/null) || AGENT_HOST=""
 
+# Launch-time knobs a relaunch must reproduce: backend, auth, model, agent
+# behavior. Exact names, one list for both clients — no prefix matching and no
+# denylist, so a variable the client injects is excluded by not appearing here.
+LAUNCH_ENV_CONFIG_NAMES="ANTHROPIC_BASE_URL ANTHROPIC_MODEL CLAUDE_CODE_USE_BEDROCK \
+CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL ZELLAUDE_CLAUDE_MODE CODEX_HOME"
+LAUNCH_ENV_SECRET_NAMES="ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CODEX_API_KEY OPENAI_API_KEY"
+# A literal set, never a pattern: a pattern would eventually match a real
+# credential. It lets local-proxy sessions replay without a re-source contract.
+LAUNCH_ENV_SAFE_SECRET_VALUE="local"
+LAUNCH_ENV_REDACTED_MARKER="<set>"
+
+PROC_ROOT=${ZELLAUDE_PROC_ROOT:-/proc}
+
+# Emits the launch_env object, or nothing when the environ cannot be read
+# (no /proc, refused read, no agent pid). Never falls back to this hook's own
+# environment: under --inspect that belongs to zellaude-attach.sh, not the agent.
+# jq splits the raw NUL-separated blob so a value containing a newline survives.
+read_launch_env() {
+  local agent_pid=$1 environ_path
+  [ -n "$agent_pid" ] || return 1
+  environ_path="$PROC_ROOT/$agent_pid/environ"
+  [ -r "$environ_path" ] || return 1
+
+  jq -Rsc \
+    --arg config_names "$LAUNCH_ENV_CONFIG_NAMES" \
+    --arg secret_names "$LAUNCH_ENV_SECRET_NAMES" \
+    --arg safe_secret_value "$LAUNCH_ENV_SAFE_SECRET_VALUE" \
+    --arg redacted_marker "$LAUNCH_ENV_REDACTED_MARKER" '
+      ($config_names | split(" ")) as $config
+      | ($secret_names | split(" ")) as $secret
+      | [ split("\u0000")[]
+          | (index("=")) as $eq
+          | select($eq != null)
+          | { name: .[:$eq], value: .[$eq + 1:] }
+          | select(.name | IN($config[], $secret[]))
+          | {
+              key: .name,
+              value: (
+                if (.name | IN($secret[])) and .value != $safe_secret_value
+                then $redacted_marker
+                else .value
+                end
+              )
+            }
+        ]
+      | from_entries
+    ' "$environ_path" 2>/dev/null
+}
+
 # Extract fields with jq (required dependency)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty')
