@@ -338,7 +338,9 @@ merged_launch_env_names() {
             else []
             end;
         ((added("secret") - $predefined) | unique) as $user_secret
-      # A name the user lists under both tiers is a secret: fail closed.
+      # A name the user lists under both tiers is a secret: fail closed. Both
+      # subtractions here are belt-and-braces — read_launch_env redacts on the
+      # secret list independently — and keep each name in exactly one tier.
       | ((added("verbatim") - $predefined - $user_secret) | unique) as $user_config
       | {
           config: ($config + $user_config),

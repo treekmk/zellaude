@@ -178,6 +178,50 @@ are reported to Zellij's own log rather than the bar — by default
 `/tmp/zellij-<uid>/zellij-log/zellij.log`, written on every run regardless of
 `--debug`; that flag only raises its verbosity.
 
+### Launch environment
+
+Agents are often started with their environment set on the command line —
+`ANTHROPIC_BASE_URL=… ANTHROPIC_AUTH_TOKEN=… claude`. Zellaude records the
+variables that decide where a session points, for both Claude Code and Codex,
+so a tool that relaunches the pane can start it the same way instead of
+reaching the default endpoint.
+
+Which list a name sits in decides what happens to its value:
+
+| List | Recorded as | Built-in names |
+|------|-------------|----------------|
+| `verbatim` | the value itself | `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_EFFORT_LEVEL`, `ZELLAUDE_CLAUDE_MODE`, `CODEX_HOME`, `CODEX_SQLITE_HOME`, `OPENAI_BASE_URL` |
+| `secret` | `<set>` — never the value | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `OPENAI_API_KEY` |
+
+One exception: a secret whose value is exactly `local` is recorded as `local`,
+so a session pointed at a local proxy replays without you re-supplying
+anything.
+
+Add your own names in `~/.config/zellij/plugins/zellaude.json`:
+
+```json
+{
+  "launch_env_names": {
+    "verbatim": ["ANTHROPIC_CUSTOM_HEADERS"],
+    "secret": ["MY_GATEWAY_TOKEN"]
+  }
+}
+```
+
+Both lists are optional. Names match exactly — no prefixes — so nothing is
+recorded that you did not name. **A name you add to `verbatim` is written to
+disk with its value**, so put anything credential-shaped under `secret`; a name
+in both lists is treated as a secret.
+
+The file can only add names. It cannot move a built-in name to the other list,
+and it cannot extend the `local` exception — both are fixed in code, so no
+settings file, mistaken or hostile, can turn a built-in secret into a recorded
+value. A missing, unreadable or malformed file leaves the built-in lists
+unchanged.
+
+Removing a name you added stops it being recorded, and drops it from the pane's
+cached entry on the next event.
+
 ### Settings
 
 Click the **Zellaude** prefix on the left side of the bar to open the settings menu. Click it again (or the `×` button) to close. Settings are persisted to `~/.config/zellij/plugins/zellaude.json`.
