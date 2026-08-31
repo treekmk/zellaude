@@ -674,4 +674,139 @@ jq -e '
   and .launch_env.CODEX_API_KEY == "<set>"
 ' "$CAPTURE_FILE" >/dev/null
 
+# --- user-extended allowlist ------------------------------------------------
+
+LAUNCH_ENV_SETTINGS="$HOME/.config/zellij/plugins/zellaude.json"
+mkdir -p "$(dirname "$LAUNCH_ENV_SETTINGS")"
+
+write_settings() {
+  if [ "$#" -eq 0 ]; then
+    rm -f "$LAUNCH_ENV_SETTINGS"
+  else
+    printf '%s' "$1" > "$LAUNCH_ENV_SETTINGS"
+  fi
+}
+
+# The names T9 added, and the regression test for a hook that reads the settings
+# file on every event: with no file at all the built-ins must still be the whole
+# list, or the suite has gone back to reading whoever runs it.
+write_settings
+write_environ \
+  'CODEX_SQLITE_HOME=/tmp/codex-sqlite' \
+  'OPENAI_BASE_URL=http://127.0.0.1:9/v1' \
+  'OPENAI_BASE_URL_EXTRA=prefix-trap' \
+  'MY_BASE_URL=http://127.0.0.1:9/mine'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-builtin","hook_event_name":"SessionStart"}'
+jq -e '
+  .launch_env.CODEX_SQLITE_HOME == "/tmp/codex-sqlite"
+  and .launch_env.OPENAI_BASE_URL == "http://127.0.0.1:9/v1"
+  and (.launch_env | keys) == ["CODEX_SQLITE_HOME", "OPENAI_BASE_URL"]
+' "$CAPTURE_FILE" >/dev/null
+
+# Each tier extends, and an added secret is still a secret: the tier the user
+# picks decides the value policy, exactly as for a predefined name.
+write_settings '{"launch_env_names":{"verbatim":["MY_BASE_URL"],"secret":["MY_TOKEN"]}}'
+write_environ \
+  'MY_BASE_URL=http://127.0.0.1:9/mine' \
+  'MY_TOKEN=not-a-real-key'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-extend","hook_event_name":"SessionStart"}'
+jq -e '
+  .launch_env.MY_BASE_URL == "http://127.0.0.1:9/mine"
+  and .launch_env.MY_TOKEN == "<set>"
+' "$CAPTURE_FILE" >/dev/null
+if grep -q 'not-a-real-key' "$CAPTURE_FILE"; then
+  printf 'a user-added secret reached the payload by value\n' >&2
+  exit 1
+fi
+
+# The frozen tiers and the escape set under a hostile config: it lists a
+# predefined secret as verbatim, and offers a safe value of its own. Neither
+# door opens — the escape set is not read from the file at all, so
+# ANTHROPIC_AUTH_TOKEN=hunter2 stays redacted while the built-in escape still
+# admits the literal "local".
+write_settings '{
+  "launch_env_names":{"verbatim":["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN"]},
+  "launch_env_safe_values":["hunter2"]
+}'
+write_environ \
+  'ANTHROPIC_API_KEY=not-a-real-key' \
+  'ANTHROPIC_AUTH_TOKEN=hunter2'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-frozen","hook_event_name":"SessionStart"}'
+jq -e '
+  .launch_env.ANTHROPIC_API_KEY == "<set>"
+  and .launch_env.ANTHROPIC_AUTH_TOKEN == "<set>"
+' "$CAPTURE_FILE" >/dev/null
+write_environ 'ANTHROPIC_AUTH_TOKEN=local'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-escape","hook_event_name":"SessionStart"}'
+jq -e '.launch_env.ANTHROPIC_AUTH_TOKEN == "local"' "$CAPTURE_FILE" >/dev/null
+
+# Frozen in the other direction too: a predefined verbatim name listed as secret
+# stays verbatim. Promotion is as much a re-tier as demotion.
+write_settings '{"launch_env_names":{"secret":["ANTHROPIC_BASE_URL"]}}'
+write_environ 'ANTHROPIC_BASE_URL=http://127.0.0.1:9/'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-promote","hook_event_name":"SessionStart"}'
+jq -e '.launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"' \
+  "$CAPTURE_FILE" >/dev/null
+
+# A name under both tiers is a secret: the ambiguity resolves fail-closed.
+write_settings '{"launch_env_names":{"verbatim":["MY_DUAL"],"secret":["MY_DUAL"]}}'
+write_environ 'MY_DUAL=not-a-real-key'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-dual","hook_event_name":"SessionStart"}'
+jq -e '.launch_env.MY_DUAL == "<set>"' "$CAPTURE_FILE" >/dev/null
+
+# An environ entry can begin with '=', so an empty name in the settings file
+# would capture it under an empty key. The name never enters the list, which is
+# why nothing on the environ side has to defend against it.
+write_settings '{"launch_env_names":{"verbatim":["","MY_BASE_URL"]}}'
+write_environ '=weird-empty-name' 'MY_BASE_URL=http://mine/'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-empty-name","hook_event_name":"SessionStart"}'
+jq -e '(.launch_env | keys) == ["MY_BASE_URL"]' "$CAPTURE_FILE" >/dev/null
+
+# A bad file yields the built-ins: never fail-open, never fail-dead. Malformed
+# and unreadable are separate paths — one fails to parse, one fails to open.
+write_settings '{"launch_env_names":{"verbatim":['
+write_environ 'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' 'MY_BASE_URL=ignored'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-malformed","hook_event_name":"SessionStart"}'
+jq -e '
+  (.launch_env | keys) == ["ANTHROPIC_BASE_URL"]
+' "$CAPTURE_FILE" >/dev/null
+
+# Skipped for root, which can read a 000 file and would fail this for the wrong
+# reason.
+if [ "$(id -u)" -ne 0 ]; then
+  write_settings '{"launch_env_names":{"verbatim":["MY_BASE_URL"]}}'
+  chmod 000 "$LAUNCH_ENV_SETTINGS"
+  run_launch_env_hook claude \
+    '{"session_id":"launch-env-unreadable","hook_event_name":"SessionStart"}'
+  chmod 600 "$LAUNCH_ENV_SETTINGS"
+  jq -e '
+    (.launch_env | keys) == ["ANTHROPIC_BASE_URL"]
+  ' "$CAPTURE_FILE" >/dev/null
+fi
+
+# Narrowing is the null rule's sibling: the config is a redaction control, so a
+# name the user just removed must not survive in the cache. The smaller object
+# is non-null, so the merge takes it wholesale — this is the one place a
+# shrinking launch_env is correct rather than the bug it resembles.
+write_settings '{"launch_env_names":{"verbatim":["MY_BASE_URL"]}}'
+write_environ 'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' 'MY_BASE_URL=http://mine/'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-narrow","hook_event_name":"SessionStart"}'
+jq -e '.launch_env.MY_BASE_URL == "http://mine/"' "$STATE_FILE" >/dev/null
+write_settings
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-narrow","hook_event_name":"PostToolUse"}'
+jq -e '
+  (.launch_env | has("MY_BASE_URL") | not)
+  and .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
+' "$STATE_FILE" >/dev/null
+
 printf 'hook mode detection tests passed\n'
