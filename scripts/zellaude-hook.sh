@@ -205,6 +205,9 @@ restore_cached_states() {
         and (.is_subagent == false)
         and ((.session_id // "") != "")
       )
+      # Attach-time consumers read the cache files directly; keeping launch_env
+      # out of this transit path costs them nothing.
+      | del(.launch_env)
     ' "$state_file" 2>/dev/null || true
   done
 }
@@ -596,12 +599,15 @@ claude_process_requested_mode() {
   printf 'unknown'
 }
 
-# The agent's effort as of this event. `.effort` does not ride every event type,
-# so the inherited launch value is what keeps SessionStart from answering empty.
+# The agent's effort as of this event, lowercase whichever source answers.
+# `.effort` does not ride every event type, so the inherited launch value is
+# what keeps SessionStart from answering empty.
 resolve_effort_level() {
   local effort_level
   effort_level=$(echo "$INPUT" | jq -r '.effort.level? // empty | ascii_downcase')
-  [ -n "$effort_level" ] || effort_level="${CLAUDE_EFFORT:-}"
+  [ -n "$effort_level" ] ||
+    effort_level=$(printf '%s' "${CLAUDE_EFFORT:-}" |
+      tr '[:upper:]' '[:lower:]')
   printf '%s\n' "$effort_level"
 }
 
@@ -805,6 +811,15 @@ case "$RAINBOW_NAME" in
   *) RAINBOW_NAME="null" ;;
 esac
 
+if [ "$INSPECT_ONLY" = true ]; then
+  # --inspect runs outside the agent's process tree: the environment here is
+  # zellaude-attach.sh's, not the agent's, and substituting it would be a lie.
+  LAUNCH_ENV=null
+else
+  LAUNCH_ENV=$(read_launch_env "$AGENT_PID") || LAUNCH_ENV=null
+fi
+CURRENT_EFFORT_LEVEL=$(resolve_effort_level)
+
 # Build compact JSON payload
 PAYLOAD=$(jq -nc \
   --arg pane_id "$ZELLIJ_PANE_ID" \
@@ -821,6 +836,8 @@ PAYLOAD=$(jq -nc \
   --argjson rainbow_name "$RAINBOW_NAME" \
   --arg rainbow_mode_marker "$RAINBOW_MODE_MARKER" \
   --argjson is_subagent "$IS_SUBAGENT" \
+  --argjson launch_env "$LAUNCH_ENV" \
+  --arg current_effort_level "$CURRENT_EFFORT_LEVEL" \
   '{
     pane_id: ($pane_id | tonumber),
     session_id: $session_id,
@@ -845,6 +862,13 @@ PAYLOAD=$(jq -nc \
       if $rainbow_mode_marker == ""
       then null
       else $rainbow_mode_marker
+      end
+    ),
+    launch_env: $launch_env,
+    current_effort_level: (
+      if $current_effort_level == ""
+      then null
+      else $current_effort_level
       end
     )
   }')
@@ -937,6 +961,20 @@ persist_root_state() {
                 )
                 then $previous.rainbow_mode_marker
                 else $current.rainbow_mode_marker
+                end
+              )
+            # null means "not captured", never "captured as nothing". A launch
+            # environ is fixed at exec, so a later null is stale, not an update.
+            | .launch_env = (
+                if $current.launch_env == null
+                then $previous.launch_env
+                else $current.launch_env
+                end
+              )
+            | .current_effort_level = (
+                if $current.current_effort_level == null
+                then $previous.current_effort_level
+                else $current.current_effort_level
                 end
               )
           else
