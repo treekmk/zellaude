@@ -24,7 +24,7 @@ Critics: plan=1 impl=1
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
-| T5 | impl2 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows; this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T9, T10, T11, T12, T13 | [ ] |
+| T5 | impl2 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows; this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T9, T10, T11, T12, T13 | [x] |
 | T6 | impl2 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T5 | [ ] |
 | T7 | impl2 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/capture-claude-launch-env`. A `.current_effort_level` mismatch is a finding about `CLAUDE_EFFORT`, reported, never patched around. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix; loop until clean. | T6 | [ ] |
 | T8 | impl2 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T7 | (Not possible to mark after deletion) |
