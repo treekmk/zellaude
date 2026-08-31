@@ -818,7 +818,14 @@ if [ "$INSPECT_ONLY" = true ]; then
 else
   LAUNCH_ENV=$(read_launch_env "$AGENT_PID") || LAUNCH_ENV=null
 fi
-CURRENT_EFFORT_LEVEL=$(resolve_effort_level)
+if [ "$CLIENT" = "codex" ]; then
+  # resolve_effort_level reads Claude's instruments — .effort.level and
+  # CLAUDE_EFFORT. On a codex agent an inherited CLAUDE_EFFORT is a Claude
+  # session's effort leaking in, so recording it would name the wrong agent.
+  CURRENT_EFFORT_LEVEL=""
+else
+  CURRENT_EFFORT_LEVEL=$(resolve_effort_level)
+fi
 
 # Build compact JSON payload
 PAYLOAD=$(jq -nc \
