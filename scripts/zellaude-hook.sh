@@ -295,7 +295,12 @@ AGENT_HOST=$(hostname 2>/dev/null) || AGENT_HOST=""
 # behavior. Exact names, one list for both clients — no prefix matching and no
 # denylist, so a variable the client injects is excluded by not appearing here.
 LAUNCH_ENV_CONFIG_NAMES="ANTHROPIC_BASE_URL ANTHROPIC_MODEL CLAUDE_CODE_USE_BEDROCK \
-CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL ZELLAUDE_CLAUDE_MODE CODEX_HOME"
+CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_EFFORT_LEVEL ZELLAUDE_CLAUDE_MODE CODEX_HOME \
+CODEX_SQLITE_HOME OPENAI_BASE_URL"
+# CODEX_SQLITE_HOME: single-source, never confirmed against a running codex.
+# OPENAI_BASE_URL: codex ignores it today (openai/codex#16719). Captured anyway
+# — a replay reproduces sameness, not effectiveness, so the relaunched session
+# must ignore it too.
 LAUNCH_ENV_SECRET_NAMES="ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CODEX_API_KEY OPENAI_API_KEY"
 # A literal set, never a pattern: a pattern would eventually match a real
 # credential. It lets local-proxy sessions replay without a re-source contract.
