@@ -596,6 +596,15 @@ claude_process_requested_mode() {
   printf 'unknown'
 }
 
+# The agent's effort as of this event. `.effort` does not ride every event type,
+# so the inherited launch value is what keeps SessionStart from answering empty.
+resolve_effort_level() {
+  local effort_level
+  effort_level=$(echo "$INPUT" | jq -r '.effort.level? // empty | ascii_downcase')
+  [ -n "$effort_level" ] || effort_level="${CLAUDE_EFFORT:-}"
+  printf '%s\n' "$effort_level"
+}
+
 detect_claude_rainbow() {
   local explicit_state transcript_result transcript_state transcript_marker
   local transcript_timestamp transcript_timestamp_ms session_started_at_ms
@@ -733,8 +742,7 @@ detect_claude_rainbow() {
     esac
   fi
 
-  effort_level=$(echo "$INPUT" | jq -r '.effort.level? // empty | ascii_downcase')
-  [ -n "$effort_level" ] || effort_level="${CLAUDE_EFFORT:-}"
+  effort_level=$(resolve_effort_level)
   case "$effort_level" in
     low|medium|high|max)
       printf 'false\t'
