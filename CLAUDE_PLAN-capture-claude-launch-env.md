@@ -97,11 +97,14 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
 - `bash -n scripts/zellaude-hook.sh`; `shellcheck` on it if available (absent from CI, so not a gate).
 - `tests/hook_mode_detection.sh` and `tests/attach_detection.sh` must stay green — they cover every
   existing payload field and the `--restore` path being narrowed.
-- `cargo build --release --target wasm32-wasip1`. `cargo test` cannot run here (wasm default target, no
-  wasmtime; the host target needs absent OpenSSL), so the shell suites are the executed checks.
-- Cheap guard for the Rust coupling, since `cargo test` cannot run here:
-  `grep -q '^state_cache_key() {' scripts/zellaude-hook.sh` — `src/manifest.rs` slices that function out
-  of the embedded script by literal search, and no executable test covers it on this machine.
+- `cargo build --release --target wasm32-wasip1`, and
+  `cargo test --target x86_64-unknown-linux-gnu --features zellij-utils/vendored_curl` — 38 tests,
+  green. An earlier draft said `cargo test` could not run here (host target needing absent OpenSSL);
+  `vendored_curl` removes that, so it is an executed check, not a documented gap.
+- The Rust coupling has a real test, not the `grep` fallback an earlier draft specified:
+  `manifest::tests::extracted_shell_function_matches_the_hook_key_scheme` exercises the literal-search
+  slice `src/manifest.rs` takes out of the embedded hook, and it runs in the unit-test target of the
+  command above — no `[lib]` in Cargo.toml, so the unit tests compile into the bin target.
 - **E2E** (required): a real `claude`, a real Zellij session and the **branch's** hook write a real
   cache file — in a staged home, so nothing the user is running is touched.
   1. `export ZELLAUDE_E2E=/tmp/capture-claude-launch-env` and make `$ZELLAUDE_E2E/{home,runtime}` mode
@@ -110,7 +113,21 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
      override (README: "running an isolated test"). It installs **this branch's** hook and registers it
      in the staged Claude settings. The live `~/.config/zellij/plugins/zellaude-hook.sh` every agent on
      this box uses is never written.
-  3. Start an isolated Zellij session named `zellaude-e2e-launchenv` (preflight: it must not already
+  3. Stage `$ZELLAUDE_E2E/home/.config/zellij/plugins/zellaude.json` carrying (a) `ANTHROPIC_CUSTOM_HEADERS`
+     added to the config tier — a real vendor variable deliberately NOT in the built-in list, which the
+     launch line also sets to `e2e-extends` — and (b) an attempt to demote `ANTHROPIC_API_KEY` to the
+     config tier. (a) proves the merge extends; (b) proves the frozen-tier rule holds under a
+     *hostile* config, which is the half the design was chosen for — and it needs no new assertion,
+     because the existing `ANTHROPIC_API_KEY == "<set>"` check becomes that proof.
+     Stage it BEFORE launching the agent: the hook reads the settings file at event time, so a
+     config staged afterwards is not in the merged allowlist when `SessionStart` fires and the
+     `ANTHROPIC_CUSTOM_HEADERS` assertion loses a race it should never be in.
+  4. Derive the `env -u` list by parsing `LAUNCH_ENV_*_NAMES` out of the hook rather than transcribing
+     it — that makes the key-set invariant self-enforcing instead of merely stated. Control the
+     environment at **session** start, not pane start: `zellij action new-pane` spawns from the zellij
+     server, so a pane started that way inherits the server's environment, not the controlled one, and
+     every assertion below depends on that control.
+     Start an isolated Zellij session named `zellaude-e2e-launchenv` (preflight: it must not already
      exist) and run one pane under a **controlled** environment — the environment is what this feature
      measures, so it cannot be left ambient. Unset every allowlisted name, then set only the names the
      case needs, the idiom `tests/hook_mode_detection.sh:36-38` already uses:
@@ -126,13 +143,10 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
      literal `${HOME}/.config/zellij/plugins/zellaude-hook.sh` (`install-hooks.sh:15`), so this is what
      makes Claude Code invoke the branch's script rather than the live one. The unroutable base URL is
      deliberate: `SessionStart` fires, the request dies immediately, **no API quota is spent**.
-  4. Stage `$ZELLAUDE_E2E/home/.config/zellij/plugins/zellaude.json` carrying (a) `ANTHROPIC_CUSTOM_HEADERS`
-     added to the config tier — a real vendor variable deliberately NOT in the built-in list, which the
-     launch line also sets to `e2e-extends` — and (b) an attempt to demote `ANTHROPIC_API_KEY` to the
-     config tier. (a) proves the merge extends; (b) proves the frozen-tier rule holds under a
-     *hostile* config, which is the half the design was chosen for — and it needs no new assertion,
-     because the existing `ANTHROPIC_API_KEY == "<set>"` check becomes that proof.
-  5. Read `$ZELLAUDE_E2E/runtime/zellaude-$(id -u)/zellaude-e2e-launchenv.<pane>.json`. Staging
+  5. Read `$ZELLAUDE_E2E/runtime/zellaude-$(id -u)/zellaude-e2e-launchenv.<pane>.json` — **snapshot it
+     while the session is still alive**. `SessionEnd` deletes the pane's own cache entry (correct,
+     pre-existing behavior), so reading after the run races that deletion.
+     Staging
      `XDG_RUNTIME_DIR` is what makes this path deterministic: `state_cache_dir` (`:48-78`) only uses it
      when it is absolute and passes `is_owned_private_parent`, and otherwise silently falls back to
      `$HOME/.cache/zellaude/runtime`. Do not assume the branch — if the file is not there, look in the
@@ -148,22 +162,35 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
     `(.launch_env | keys) == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",`
     `"ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_EFFORT_LEVEL"]` — the whole key set, not a spot check.
     **Invariant, stated so a missing edit surfaces here rather than at run time: the expected key set IS
-    exactly the set of allowlisted names step 3 sets.** Change either and the other is wrong; a literal
+    exactly the set of allowlisted names step 4 sets.** Change either and the other is wrong; a literal
     list alone cannot say that. An exact-name allowlist cannot
     leak an injected variable by construction, so asserting one is absent proves nothing; asserting the
     set catches the failure that *is* possible, a reader capturing more than it should. This strictness
-    is only sound because step 3 controls the environment.
+    is only sound because step 4 controls the environment.
     Finally `grep -q 'e2e-not-a-real-key' <cache file>` must **fail** — direct evidence that a value
     which reached `/proc` did not reach disk, which is the claim a reader of this feature most wants.
-  - `.current_effort_level == "high"` is asserted **separately**, and a mismatch is reported, never
-    fixed. Its only source on `SessionStart` is the inherited `CLAUDE_EFFORT`, and that a session whose
-    effort was set on the command line exports it is an assumption of this PLAN, not an established
-    fact — observed once, on a session already running at `xhigh`. Because step 3 unsets
-    `CLAUDE_EFFORT`, a `"high"` here can only have been injected by this run's own agent, which makes
-    this a real probe of the export semantics rather than a hope. A `null` is therefore a finding about
-    `CLAUDE_EFFORT` and a correction to this PLAN, never a defect to patch around. The shell suites,
-    where both sources are controllable by construction, are what gate the field's logic; only this can
-    say what the vendor binary actually exports.
+  - `.current_effort_level == null` on this run, and that is **correct, not a failure**. Note what this
+    assertion can and cannot do: it documents the lifecycle case and passes identically whether the
+    field works or is permanently dead, so it is not the field's coverage. The field's LOGIC is covered
+    by an executed test — T4 asserts `"high"` from a stdin `effort` payload — and the VENDOR half (that
+    a real claude populates `.effort` at all) by T14's recorded-payload fixture. Measured on
+    claude 2.1.251 and confirmed against the hook-input schema in the shipped binary: `effort` is in the
+    BASE payload object but `.optional()`, populated only in a tool-use context — the vendor's own text
+    reads "Present for hooks that fire within a tool-use context (PreToolUse, PostToolUse, Stop,
+    SubagentStop, etc.) ... absent for session-lifecycle hooks", and `CLAUDE_EFFORT` tracks it exactly.
+    `claude -p hi` fires only lifecycle events, so both sources are legitimately empty. It is NOT the
+    case that tool events add a field outside the base schema.
+    The field is therefore null only until a session's first tool call, after which the null-keeps-
+    `$previous` rule carries the value across the lifecycle events that supply nothing. Verified end to
+    end by feeding the REAL captured vendor `PreToolUse` payload into the unmodified hook: in
+    `effort={"level":"high"}`, out `current_effort_level = "high"`.
+    To exercise that path the run needs a tool call, which an unroutable `ANTHROPIC_BASE_URL` cannot
+    produce — the no-quota property and the tool event are in direct conflict. Resolve it with a local
+    mock endpoint returning an SSE `tool_use` block, never by spending real quota.
+    (An earlier draft asserted `== "high"` here, on the mistaken premise that `CLAUDE_EFFORT` reaches
+    every process claude spawns. That came from probing a Bash-TOOL subprocess and generalising to a
+    HOOK subprocess — different spawn paths, and the tool one is precisely the context where the vendor
+    does populate it.)
   - **Fallback** if `claude` will not start unattended under a staged home — report before using it:
     keep the real Zellij session and the real branch hook, substitute a process named `claude` with a
     controlled environ. This still crosses the environ read, allowlist, payload build and cache write;

@@ -21,13 +21,19 @@ Critics: plan=1 impl=1
 | T13 | impl1 | Document the launch-env allowlist key in `README.md` as its own subsection beside **Custom states** and **Session templates** — it is a hand-edited `zellaude.json` key, not a bar-menu toggle, so it does not belong in the Settings table. Cover the two lists, that predefined tiers and the escape set are frozen, that secrets record `<set>`, and that a bad file falls back to the built-ins. | T10 | [x] |
 | T11 | impl1 | Tests for T9 and T10: the added names; extension of each tier; a config attempting to re-tier a predefined secret name (must stay `<set>`); a config attempting to extend the escape set (must not); malformed, unreadable and absent settings files (all yield the built-ins); and a narrowed allowlist producing a smaller object. | T10 | [x] |
 
+### Vendor-shape coverage (added by revision 2)
+| ID | Agent | Task | Depends on | Status |
+|----|-------|------|------------|--------|
+| T14 | impl1 | Preserve the real vendor `PreToolUse` payload impl2 captured (`/tmp/capture-claude-launch-env/probe2/stdin-638096-PreToolUse.json`, claude 2.1.251) as a test fixture, eliding `session_id`, `transcript_path`, `cwd`, `prompt_id`, `tool_input` and `tool_use_id` but keeping `effort: {level: "high"}`, `hook_event_name`, `tool_name` and `permission_mode` verbatim. Add a case feeding it to the hook and asserting `current_effort_level == "high"`. **Copy the file out of `/tmp` first — it is the only surviving evidence and nothing protects it from cleanup.** Purpose: the one-off diagnostic proved a real claude populates `.effort`; a fixture makes that reproducible instead of a claim in prose. | T7 | [ ] |
+| T15 | impl2 | Re-run the PLAN's Verification on the tree including T14 — suites, `bash -n`, `cargo build`, and `cargo test --target x86_64-unknown-linux-gnu --features zellij-utils/vendored_curl`. The E2E does NOT need re-running: T14 adds a fixture-driven test, touches no hook code, and the E2E's six pass conditions already hold on this tree. Say so explicitly in the report rather than silently skipping it. | T14 | [ ] |
+
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
 | T5 | impl2 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows; this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T9, T10, T11, T12, T13 | [x] |
 | T6 | impl2 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T5 | [x] |
 | T7 | impl2 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/capture-claude-launch-env`. A `.current_effort_level` mismatch is a finding about `CLAUDE_EFFORT`, reported, never patched around. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix; loop until clean. | T6 | [x] |
-| T8 | impl2 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T7 | (Not possible to mark after deletion) |
+| T8 | impl2 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T15 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -51,7 +57,9 @@ graph TD
   T12[T12 · impl1 · record amendments] --> T5
   T5 --> T6[T6 · impl2 · compact-comments]
   T6 --> T7[T7 · impl2 · verify + E2E]
-  T7 --> T8[T8 · impl2 · archive]
+  T7 --> T14[T14 · impl1 · vendor fixture]
+  T14 --> T15[T15 · impl2 · re-verify]
+  T15 --> T8[T8 · impl2 · archive]
 ```
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
