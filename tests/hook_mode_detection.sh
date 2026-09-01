@@ -775,6 +775,23 @@ jq -e '
   (.launch_env | keys) == ["ANTHROPIC_BASE_URL"]
 ' "$CAPTURE_FILE" >/dev/null
 
+# A bare array is a SUPPORTED settings shape, not a malformed one: it is custom
+# states without the `custom_states` wrapper (README) and `parse_config_document`
+# matches `Value::Array` ahead of both object arms. Worth its own case despite
+# asserting the same outcome as the malformed one, because the failure it guards
+# differs in kind: indexing an array with a string errors, so if `added`'s `try`
+# is ever dropped the jq exits non-zero, read_launch_env returns 1, and
+# launch_env is null on every event for that user — a documented config silently
+# losing the feature outright, not merely getting the wrong list. Asserting the
+# key set catches exactly that, since `null | keys` fails.
+write_settings '[{"id":"claude6","width":3,"height":2,"commands":["claude"]}]'
+write_environ 'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' 'MY_BASE_URL=ignored'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-array","hook_event_name":"SessionStart"}'
+jq -e '
+  (.launch_env | keys) == ["ANTHROPIC_BASE_URL"]
+' "$CAPTURE_FILE" >/dev/null
+
 # Skipped for root, which can read a 000 file and would fail this for the wrong
 # reason.
 if [ "$(id -u)" -ne 0 ]; then
