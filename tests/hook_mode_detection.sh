@@ -805,4 +805,22 @@ jq -e '
   and .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
 ' "$STATE_FILE" >/dev/null
 
+# A redacted subset of a real claude 2.1.252 PreToolUse payload: fields removed,
+# none altered. It is the evidence that the vendor populates `.effort`, so
+# current_effort_level has a source on the events that carry one. The harness
+# unsets CLAUDE_EFFORT, which is what makes "high" attributable to the payload
+# rather than to the environment.
+VENDOR_PRETOOLUSE="$TEST_DIR/vendor-pretooluse.json"
+cat > "$VENDOR_PRETOOLUSE" <<'VENDOR_PRETOOLUSE_JSON'
+{
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash"
+}
+VENDOR_PRETOOLUSE_JSON
+run_hook claude "$(cat "$VENDOR_PRETOOLUSE")" false
+jq -e '.current_effort_level == "high"' "$CAPTURE_FILE" >/dev/null
+
 printf 'hook mode detection tests passed\n'
