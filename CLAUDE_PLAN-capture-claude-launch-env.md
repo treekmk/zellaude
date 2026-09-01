@@ -174,7 +174,7 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
     field works or is permanently dead, so it is not the field's coverage. The field's LOGIC is covered
     by an executed test — T4 asserts `"high"` from a stdin `effort` payload — and the VENDOR half (that
     a real claude populates `.effort` at all) by T14's recorded-payload fixture. Measured on
-    claude 2.1.251 and confirmed against the hook-input schema in the shipped binary: `effort` is in the
+    claude 2.1.252 and confirmed against the hook-input schema in the shipped binary: `effort` is in the
     BASE payload object but `.optional()`, populated only in a tool-use context — the vendor's own text
     reads "Present for hooks that fire within a tool-use context (PreToolUse, PostToolUse, Stop,
     SubagentStop, etc.) ... absent for session-lifecycle hooks", and `CLAUDE_EFFORT` tracks it exactly.
