@@ -27,13 +27,18 @@ Critics: plan=1 impl=1
 | T14 | impl1 | Preserve the real vendor `PreToolUse` payload impl2 captured (`/tmp/capture-claude-launch-env/probe2/stdin-638096-PreToolUse.json`, claude 2.1.252) as a test fixture, eliding `session_id`, `transcript_path`, `cwd`, `prompt_id`, `tool_input`, `tool_use_id` **and `permission_mode`** but keeping `effort: {level: "high"}`, `hook_event_name` and `tool_name` verbatim — three kept, seven elided, which partitions the payload's ten keys exactly. `permission_mode` is elided rather than kept because its captured value is `bypassPermissions`, an artifact of the `--dangerously-skip-permissions` the diagnostic needed to run unattended; nothing in the hook reads it, so keeping it would freeze a flag no ordinary user runs into a file readers take as a typical payload. The fixture's whole value is that every field in it is unmodified vendor output — eliding preserves that, editing the value to `default` would destroy it. Add a case feeding it to the hook and asserting `current_effort_level == "high"`. **Copy the file out of `/tmp` first — it is the only surviving evidence and nothing protects it from cleanup.** Purpose: the one-off diagnostic proved a real claude populates `.effort`; a fixture makes that reproducible instead of a claim in prose. The fixture MUST carry its provenance in the test file itself — one line, e.g. "a redacted subset of a real claude 2.1.252 PreToolUse payload: fields removed, none altered". Every other record of that provenance dies with this run (this row is `git rm`'d at T8, the chat goes with the session), leaving a three-field JSON that reads as a hand-written stub — and the natural way to improve a stub is to add plausible fields, which is the exact fabrication this spec exists to prevent. | T7 | [x] |
 | T15 | impl2 | Re-run the PLAN's Verification on the tree including T14 — suites, `bash -n`, `cargo build`, and `cargo test --target x86_64-unknown-linux-gnu --features zellij-utils/vendored_curl`. The E2E does NOT need re-running: T14 adds a fixture-driven test, touches no hook code, and the E2E's six pass conditions already hold on this tree. Say so explicitly in the report rather than silently skipping it. | T14 | [x] |
 
+### Documented-shape coverage (added by revision 7)
+| ID | Agent | Task | Depends on | Status |
+|----|-------|------|------------|--------|
+| T16 | impl1 | Add one `write_settings` case beside the malformed one: a `zellaude.json` that is a **bare array**. README:103 documents this as a supported shape ("the settings file may also contain a single state object or an array of states"), and `custom_layouts.rs:401` accepts it. `added()` already survives it — indexing an array with a string errors and the `try` catches, so the built-ins stand — but nothing asserts it. Pin the behavior: built-in lists used, capture unaffected. The failure mode if that `try` is ever refactored away is not a wrong list — the jq exits non-zero, `read_launch_env` returns 1, and `launch_env` is null on EVERY event for that user: total silent feature loss for a documented config. Run both shell suites; no `cargo`/E2E re-run needed, no hook code changes. | T15 | [ ] |
+
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
 | T5 | impl2 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows; this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T9, T10, T11, T12, T13 | [x] |
 | T6 | impl2 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T5 | [x] |
 | T7 | impl2 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/capture-claude-launch-env`. A `.current_effort_level` mismatch is a finding about `CLAUDE_EFFORT`, reported, never patched around. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix; loop until clean. | T6 | [x] |
-| T8 | impl2 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry (if it names the client version it is **2.1.252** — verified against the captured session's transcript and `claude --version`, not reproduced from an earlier draft that said 2.1.251), delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T15 | (Not possible to mark after deletion) |
+| T8 | impl2 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry (if it names the client version it is **2.1.252** — verified against the captured session's transcript and `claude --version`, not reproduced from an earlier draft that said 2.1.251), delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T16 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -59,7 +64,8 @@ graph TD
   T6 --> T7[T7 · impl2 · verify + E2E]
   T7 --> T14[T14 · impl1 · vendor fixture]
   T14 --> T15[T15 · impl2 · re-verify]
-  T15 --> T8[T8 · impl2 · archive]
+  T15 --> T16[T16 · impl1 · bare-array settings case]
+  T16 --> T8[T8 · impl2 · archive]
 ```
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
