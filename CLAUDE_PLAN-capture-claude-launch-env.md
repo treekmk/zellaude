@@ -98,8 +98,10 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
 - `tests/hook_mode_detection.sh` and `tests/attach_detection.sh` must stay green — they cover every
   existing payload field and the `--restore` path being narrowed.
 - `cargo build --release --target wasm32-wasip1`, and
-  `cargo test --target x86_64-unknown-linux-gnu --features zellij-utils/vendored_curl` — 38 tests,
-  green. An earlier draft said `cargo test` could not run here (host target needing absent OpenSSL);
+  `cargo test --target x86_64-unknown-linux-gnu --features zellij-utils/vendored_curl` — the whole
+  suite across ten binaries, exit 0. The claim is the exit code, not a count: a pinned number rots
+  silently with every test added, and a wrong one invites the next reader to think something
+  regressed. (175 tests when last run.) An earlier draft said `cargo test` could not run here (host target needing absent OpenSSL);
   `vendored_curl` removes that, so it is an executed check, not a documented gap.
 - The Rust coupling has a real test, not the `grep` fallback an earlier draft specified:
   `manifest::tests::extracted_shell_function_matches_the_hook_key_scheme` exercises the literal-search
