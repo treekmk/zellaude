@@ -174,12 +174,17 @@ current_effort_level  string | null   # effort as of this event's ts_ms, NOT lau
     field works or is permanently dead, so it is not the field's coverage. The field's LOGIC is covered
     by an executed test — T4 asserts `"high"` from a stdin `effort` payload — and the VENDOR half (that
     a real claude populates `.effort` at all) by T14's recorded-payload fixture. Measured on
-    claude 2.1.252 and confirmed against the hook-input schema in the shipped binary: `effort` is in the
-    BASE payload object but `.optional()`, populated only in a tool-use context — the vendor's own text
-    reads "Present for hooks that fire within a tool-use context (PreToolUse, PostToolUse, Stop,
-    SubagentStop, etc.) ... absent for session-lifecycle hooks", and `CLAUDE_EFFORT` tracks it exactly.
-    `claude -p hi` fires only lifecycle events, so both sources are legitimately empty. It is NOT the
-    case that tool events add a field outside the base schema.
+    claude 2.1.252, and the BEHAVIOR confirmed verbatim in that binary's hook-input schema: `effort` is
+    `.optional()`, and the vendor's own text reads "Present for hooks that fire within a tool-use
+    context (PreToolUse, PostToolUse, Stop, SubagentStop, etc.) ... absent for session-lifecycle hooks",
+    with `CLAUDE_EFFORT` tracking it exactly. `claude -p hi` fires only lifecycle events, so both
+    sources are legitimately empty.
+    Separately and with a narrower warrant: `effort` sits in the BASE payload object rather than being a
+    field tool events add — verified structurally in **2.1.251** only, by co-location with `session_id`,
+    `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, `agent_id` and `agent_type` in one object
+    literal. That probe returns nothing against 2.1.252, which is evidence the probe does not survive a
+    bundler rebuild, NOT evidence the field moved. Nothing in this design rests on the structural claim;
+    the behavioral one above is what the field's semantics follow from.
     The field is therefore null only until a session's first tool call, after which the null-keeps-
     `$previous` rule carries the value across the lifecycle events that supply nothing. Verified end to
     end by feeding the REAL captured vendor `PreToolUse` payload into the unmodified hook: in
