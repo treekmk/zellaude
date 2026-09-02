@@ -182,20 +182,31 @@ are reported to Zellij's own log rather than the bar — by default
 
 Agents are often started with their environment set on the command line —
 `ANTHROPIC_BASE_URL=… ANTHROPIC_AUTH_TOKEN=… claude`. Zellaude records the
-variables that decide where a session points, for both Claude Code and Codex,
-so a tool that relaunches the pane can start it the same way instead of
-reaching the default endpoint.
+variables that decide where a session points, which account and config home
+it runs under, and which model it uses, for both Claude Code and Codex, so a
+tool that relaunches the pane can start it the same way instead of reaching
+the default endpoint.
 
 Which list a name sits in decides what happens to its value:
 
-| List | Recorded as | Built-in names |
-|------|-------------|----------------|
-| `verbatim` | the value itself | `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_EFFORT_LEVEL`, `ZELLAUDE_CLAUDE_MODE`, `CODEX_HOME`, `CODEX_SQLITE_HOME`, `OPENAI_BASE_URL` |
-| `secret` | `<set>` — never the value | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `OPENAI_API_KEY` |
+| List | Recorded as |
+|------|-------------|
+| `verbatim` | the value itself |
+| `secret` | `<set>` — never the value |
 
 One exception: a secret whose value is exactly `local` is recorded as `local`,
 so a session pointed at a local proxy replays without you re-supplying
 anything.
+
+Built-in names, by what they decide:
+
+| Decides | `verbatim` | `secret` |
+|---------|------------|----------|
+| Claude: endpoint and provider | `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_BEDROCK_BASE_URL`, `ANTHROPIC_BEDROCK_REGION_PREFIX`, `ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION`, `CLAUDE_CODE_SKIP_BEDROCK_AUTH`, `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_SKIP_MANTLE_AUTH`, `CLAUDE_CODE_USE_VERTEX`, `ANTHROPIC_VERTEX_BASE_URL`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLAUDE_CODE_SKIP_VERTEX_AUTH`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_FOUNDRY_BASE_URL`, `ANTHROPIC_FOUNDRY_RESOURCE`, `CLAUDE_CODE_SKIP_FOUNDRY_AUTH`, `CLAUDE_CODE_USE_ANTHROPIC_AWS`, `ANTHROPIC_AWS_BASE_URL`, `ANTHROPIC_AWS_WORKSPACE_ID`, `CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH` | `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY` |
+| Claude: identity and config home | `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_WORKSPACE_ID`, `CLAUDE_CODE_OAUTH_SCOPES`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_PROJECT_DIR_NAME` | `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` |
+| Claude: model and limits | `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_FABLE_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_CUSTOM_MODEL_OPTION`, `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_CODE_DISABLE_1M_CONTEXT` | |
+| Zellaude | `ZELLAUDE_CLAUDE_MODE` | |
+| Codex | `CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_CA_CERTIFICATE`, `CODEX_OSS_BASE_URL`, `CODEX_OSS_PORT`, `OPENAI_BASE_URL`, `OPENAI_ORGANIZATION`, `OPENAI_PROJECT`, `OPENAI_FEDERATION_RULE_ID`, `OPENAI_IDENTITY_TOKEN_FILE`, `OPENAI_WORKLOAD_IDENTITY_CONTEXT` | `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `OPENAI_API_KEY` |
 
 Add your own names in `~/.config/zellij/plugins/zellaude.json`:
 

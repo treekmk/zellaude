@@ -556,7 +556,9 @@ write_environ \
   'ANTHROPIC_BASE_URL=http://127.0.0.1:9/' \
   'ANTHROPIC_AUTH_TOKEN=local' \
   'ANTHROPIC_API_KEY=not-a-real-key' \
+  'ANTHROPIC_SMALL_FAST_MODEL=fast-model' \
   'CLAUDE_CODE_EFFORT_LEVEL=high' \
+  'CLAUDE_CODE_MAX_CONTEXT_TOKENS=100000' \
   'ANTHROPIC_BASE_URL_EXTRA=prefix-trap' \
   'CLAUDE_CODE_BRIDGE_SESSION_ID=injected' \
   'PATH=/usr/bin'
@@ -569,12 +571,16 @@ jq -e '
   .launch_env.ANTHROPIC_BASE_URL == "http://127.0.0.1:9/"
   and .launch_env.ANTHROPIC_AUTH_TOKEN == "local"
   and .launch_env.ANTHROPIC_API_KEY == "<set>"
+  and .launch_env.ANTHROPIC_SMALL_FAST_MODEL == "fast-model"
   and .launch_env.CLAUDE_CODE_EFFORT_LEVEL == "high"
+  and .launch_env.CLAUDE_CODE_MAX_CONTEXT_TOKENS == "100000"
   and (.launch_env | keys) == [
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
-    "CLAUDE_CODE_EFFORT_LEVEL"
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_EFFORT_LEVEL",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
   ]
 ' "$CAPTURE_FILE" >/dev/null
 if grep -q 'not-a-real-key' "$CAPTURE_FILE" "$STATE_FILE"; then
@@ -699,6 +705,103 @@ jq -e '
   and .launch_env.OPENAI_BASE_URL == "http://127.0.0.1:9/v1"
   and (.launch_env | keys) == ["CODEX_SQLITE_HOME", "OPENAI_BASE_URL"]
 ' "$CAPTURE_FILE" >/dev/null
+
+# The complete built-in list, each name under its tier, and nothing beyond it.
+# One line per name on each side, so a name added to the hook fails here until
+# it is classified, and a re-tiered one fails on its value. The two traps are
+# a documented display-label sibling an exact match must not admit, and a
+# codex-injected name.
+LAUNCH_ENV_BUILTIN_VERBATIM_ENTRIES=(
+  'ANTHROPIC_BASE_URL=http://127.0.0.1:9/'
+  'CLAUDE_CODE_USE_BEDROCK=1'
+  'ANTHROPIC_BEDROCK_BASE_URL=http://127.0.0.1:9/bedrock'
+  'ANTHROPIC_BEDROCK_REGION_PREFIX=eu'
+  'ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION=eu-west-1'
+  'CLAUDE_CODE_SKIP_BEDROCK_AUTH=1'
+  'CLAUDE_CODE_USE_MANTLE=1'
+  'CLAUDE_CODE_SKIP_MANTLE_AUTH=1'
+  'CLAUDE_CODE_USE_VERTEX=1'
+  'ANTHROPIC_VERTEX_BASE_URL=http://127.0.0.1:9/vertex'
+  'ANTHROPIC_VERTEX_PROJECT_ID=my-project'
+  'CLAUDE_CODE_SKIP_VERTEX_AUTH=1'
+  'CLAUDE_CODE_USE_FOUNDRY=1'
+  'ANTHROPIC_FOUNDRY_BASE_URL=http://127.0.0.1:9/foundry'
+  'ANTHROPIC_FOUNDRY_RESOURCE=my-resource'
+  'CLAUDE_CODE_SKIP_FOUNDRY_AUTH=1'
+  'CLAUDE_CODE_USE_ANTHROPIC_AWS=1'
+  'ANTHROPIC_AWS_BASE_URL=http://127.0.0.1:9/aws'
+  'ANTHROPIC_AWS_WORKSPACE_ID=wrkspc_test'
+  'CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH=1'
+  'ANTHROPIC_PROFILE=work'
+  'ANTHROPIC_FEDERATION_RULE_ID=fedrule_test'
+  'ANTHROPIC_ORGANIZATION_ID=org_test'
+  'ANTHROPIC_WORKSPACE_ID=wrkspc_test'
+  'CLAUDE_CODE_OAUTH_SCOPES=user:profile user:inference'
+  'CLAUDE_CONFIG_DIR=/tmp/claude-home'
+  'CLAUDE_CODE_PROJECT_DIR_NAME=my-project'
+  'ANTHROPIC_MODEL=main-model'
+  'ANTHROPIC_DEFAULT_MODEL=opus'
+  'ANTHROPIC_DEFAULT_OPUS_MODEL=opus-model'
+  'ANTHROPIC_DEFAULT_SONNET_MODEL=sonnet-model'
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL=haiku-model'
+  'ANTHROPIC_DEFAULT_FABLE_MODEL=fable-model'
+  'ANTHROPIC_SMALL_FAST_MODEL=fast-model'
+  'ANTHROPIC_CUSTOM_MODEL_OPTION=custom-model'
+  'CLAUDE_CODE_SUBAGENT_MODEL=sonnet'
+  'CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1'
+  'CLAUDE_CODE_EFFORT_LEVEL=high'
+  'CLAUDE_CODE_MAX_CONTEXT_TOKENS=100000'
+  'CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000'
+  'CLAUDE_CODE_AUTO_COMPACT_WINDOW=80000'
+  'CLAUDE_CODE_DISABLE_1M_CONTEXT=1'
+  'ZELLAUDE_CLAUDE_MODE=ultracode'
+  'CODEX_HOME=/tmp/codex-home'
+  'CODEX_SQLITE_HOME=/tmp/codex-sqlite'
+  'CODEX_CA_CERTIFICATE=/tmp/ca.pem'
+  'CODEX_OSS_BASE_URL=http://127.0.0.1:9/v1'
+  'CODEX_OSS_PORT=11434'
+  'OPENAI_BASE_URL=http://127.0.0.1:9/v1'
+  'OPENAI_ORGANIZATION=org-test'
+  'OPENAI_PROJECT=proj_test'
+  'OPENAI_FEDERATION_RULE_ID=fedrule_test'
+  'OPENAI_IDENTITY_TOKEN_FILE=/tmp/token.jwt'
+  'OPENAI_WORKLOAD_IDENTITY_CONTEXT={"run":"test"}'
+)
+LAUNCH_ENV_BUILTIN_SECRET_NAMES=(
+  ANTHROPIC_AUTH_TOKEN
+  ANTHROPIC_API_KEY
+  CLAUDE_CODE_OAUTH_TOKEN
+  CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+  ANTHROPIC_FOUNDRY_API_KEY
+  ANTHROPIC_FOUNDRY_AUTH_TOKEN
+  ANTHROPIC_AWS_API_KEY
+  CODEX_API_KEY
+  CODEX_ACCESS_TOKEN
+  OPENAI_API_KEY
+)
+write_settings
+write_environ \
+  "${LAUNCH_ENV_BUILTIN_VERBATIM_ENTRIES[@]}" \
+  "${LAUNCH_ENV_BUILTIN_SECRET_NAMES[@]/%/=not-a-real-key}" \
+  'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME=prefix-trap' \
+  'CODEX_SANDBOX=seatbelt'
+run_launch_env_hook claude \
+  '{"session_id":"launch-env-all-builtins","hook_event_name":"SessionStart"}'
+jq -e \
+  --arg verbatim "$(printf '%s\n' "${LAUNCH_ENV_BUILTIN_VERBATIM_ENTRIES[@]}")" \
+  --arg secret "$(printf '%s\n' "${LAUNCH_ENV_BUILTIN_SECRET_NAMES[@]}")" '
+  def lines: split("\n") | map(select(. != ""));
+  (
+    ($verbatim | lines | map(capture("^(?<key>[^=]+)=(?<value>.*)$")))
+    + ($secret | lines | map({key: ., value: "<set>"}))
+    | from_entries
+  ) as $expected
+  | .launch_env == $expected
+' "$CAPTURE_FILE" >/dev/null
+if grep -q 'not-a-real-key' "$CAPTURE_FILE" "$STATE_FILE"; then
+  printf 'a built-in secret reached the payload or the cache by value\n' >&2
+  exit 1
+fi
 
 # Each tier extends, and an added secret is still a secret: the tier the user
 # picks decides the value policy, exactly as for a predefined name.
