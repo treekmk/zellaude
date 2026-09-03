@@ -116,7 +116,6 @@ A generator turns one prompt line into a whole layout. Put one KDL file per gene
 
 `~/.config/zellij/plugins/zellaude/generators/madev.kdl`:
 
-<!-- CLAUDE: Hey, we can give starting prompts also with the names, right? Starting prompt as `/madev-impl impl{i}` and `/madev-impl-crit impl{i}-crit{k}` would be better for the example because that's probably what's actually going to be used. -->
 ```kdl
 command "impl"
 arg "n"
@@ -128,21 +127,21 @@ min_pane_height 12
 
 tab "{tab}-impl" unless="single_tab only_crit" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i}"
+        pane "claude -n impl{i} '/madev-impl impl{i}'"
     }
 }
 each for="k" in="from..from+m" {
     tab "{tab}-crit{k}" unless="single_tab" {
         each for="i" in="1..=n" {
-            pane "claude -n impl{i}-crit{k}"
+            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
         }
     }
 }
 tab if="single_tab" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i}" unless="only_crit"
+        pane "claude -n impl{i} '/madev-impl impl{i}'" unless="only_crit"
         each for="k" in="from..from+m" {
-            pane "claude -n impl{i}-crit{k}"
+            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
         }
     }
 }

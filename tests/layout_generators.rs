@@ -30,21 +30,21 @@ min_pane_height 12
 
 tab "{tab}-impl" unless="single_tab only_crit" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i}"
+        pane "claude -n impl{i} '/madev-impl impl{i}'"
     }
 }
 each for="k" in="from..from+m" {
     tab "{tab}-crit{k}" unless="single_tab" {
         each for="i" in="1..=n" {
-            pane "claude -n impl{i}-crit{k}"
+            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
         }
     }
 }
 tab if="single_tab" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i}" unless="only_crit"
+        pane "claude -n impl{i} '/madev-impl impl{i}'" unless="only_crit"
         each for="k" in="from..from+m" {
-            pane "claude -n impl{i}-crit{k}"
+            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
         }
     }
 }
@@ -510,8 +510,8 @@ fn expands_the_madev_file_the_three_documented_ways() {
     let per_role = madev("impl 4 --crit-per-impl 2");
     assert_eq!(names(&per_role), ["src-impl", "src-crit1", "src-crit2"]);
     assert_eq!(commands(&per_role[0]).len(), 4);
-    assert_eq!(commands(&per_role[0])[0], "claude -n impl1");
-    assert_eq!(commands(&per_role[2])[3], "claude -n impl4-crit2");
+    assert_eq!(commands(&per_role[0])[0], "claude -n impl1 '/madev-impl impl1'");
+    assert_eq!(commands(&per_role[2])[3], "claude -n impl4-crit2 '/madev-impl-crit impl4-crit2'");
 
     // One tab, impl-major: every implementer sits beside its own critics.
     let single = madev("impl 4 --single-tab");
@@ -519,20 +519,20 @@ fn expands_the_madev_file_the_three_documented_ways() {
     assert_eq!(
         commands(&single[0]),
         [
-            "claude -n impl1",
-            "claude -n impl1-crit1",
-            "claude -n impl2",
-            "claude -n impl2-crit1",
-            "claude -n impl3",
-            "claude -n impl3-crit1",
-            "claude -n impl4",
-            "claude -n impl4-crit1",
+            "claude -n impl1 '/madev-impl impl1'",
+            "claude -n impl1-crit1 '/madev-impl-crit impl1-crit1'",
+            "claude -n impl2 '/madev-impl impl2'",
+            "claude -n impl2-crit1 '/madev-impl-crit impl2-crit1'",
+            "claude -n impl3 '/madev-impl impl3'",
+            "claude -n impl3-crit1 '/madev-impl-crit impl3-crit1'",
+            "claude -n impl4 '/madev-impl impl4'",
+            "claude -n impl4-crit1 '/madev-impl-crit impl4-crit1'",
         ]
     );
 
     let resumed = madev("impl 4 --crit-per-impl 2 --only-crit 2");
     assert_eq!(names(&resumed), ["src-crit2", "src-crit3"]);
-    assert_eq!(commands(&resumed[0])[0], "claude -n impl1-crit2");
+    assert_eq!(commands(&resumed[0])[0], "claude -n impl1-crit2 '/madev-impl-crit impl1-crit2'");
 }
 
 #[test]
