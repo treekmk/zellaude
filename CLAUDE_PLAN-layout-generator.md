@@ -18,12 +18,12 @@ Mode: ask
 **Relevant files**
 - `src/layout_generators.rs` — NEW: file schema and parse, prompt-line argument parsing, expansion, grid planning, floors. Depends only on `custom_layouts::{CustomLayout, CommandGrid, MAX_PANES}`; no host calls, no `crate::state`, so the test harness can include it by `#[path]`.
 - `tests/layout_generators.rs` — NEW: `#[path]`-includes `custom_layouts` and `layout_generators` (pattern of `tests/session_templates.rs:1-8`); asserts geometry by round-tripping the emitted KDL through `zellij_utils::input::layout::Layout::from_kdl` + `position_panes_in_space` (pattern of `tests/custom_layouts.rs:536-584`).
-- `src/custom_layouts.rs` — `tabs_to_kdl`; `to_kdl` (`:213-285`) delegates; `TabChrome::bar_rows`. `CustomLayout`'s fields are unchanged (test literals lack `..Default::default()`).
+- `src/custom_layouts.rs` — `tabs_to_kdl`; `to_kdl` (`:213-285`) delegates and becomes `#[cfg(test)]` once the submit path emits through `tabs_to_kdl` (the single-tab form the tests exercise; nothing dead ships); `TabChrome::bar_rows`. `CustomLayout`'s fields are unchanged (test literals lack `..Default::default()`).
 - `tests/custom_layouts.rs` — multi-tab emission tests; the ten existing `CustomLayout::to_kdl` call sites (eight here, two in `src/main.rs`) stay.
 - `src/main.rs` — `RELOAD_CUSTOM_STATES_SCRIPT` beside `SAVE_CONFIG_SCRIPT` (`:27`); `start_custom_layout_prompt` (`:637`) issues the reload; `open_custom_layout` (`:719`) defers or resolves; new `RunCommandResult` arm `reload_custom_states` beside `load_config` (`:311`); `mod layout_generators`.
 - `src/state.rs` — new `State` fields (below).
 - `Cargo.toml` — `kdl = "4.7"` (already pinned in `Cargo.lock` by zellij-utils); owned by impl1 in T1, since the module and its test harness cannot compile without it.
-- `README.md` — "Custom states" (`:55-111`): "Reload the plugin" (`:79`) replaced by hot reload; the Zellij-fit sentence (`:83`) replaced by the floors; new "Generators" subsection; Features bullet (`:16`).
+- `README.md` — "Custom states" (`:55-111`): "Reload the plugin" (`:79`) replaced by hot reload; the Zellij-fit sentence (`:83`) stays for fixed states, which the floors never touch, and points to the Generators section; new "Generators" subsection; Features bullet (`:16`).
 - Not touched: `src/render.rs` (see **Render untouched**), `src/session_templates.rs`, `install.sh`, `scripts/`.
 
 **Naming & signatures**
