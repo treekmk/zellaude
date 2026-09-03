@@ -116,6 +116,7 @@ A generator turns one prompt line into a whole layout. Put one KDL file per gene
 
 `~/.config/zellij/plugins/zellaude/generators/madev.kdl`:
 
+<!-- CLAUDE: Hey, we can give starting prompts also with the names, right? Starting prompt as `/madev-impl impl{i}` and `/madev-impl-crit impl{i}-crit{k}` would be better for the example because that's probably what's actually going to be used. -->
 ```kdl
 command "impl"
 arg "n"
