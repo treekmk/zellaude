@@ -116,7 +116,7 @@ pub custom_state_reload_in_flight: bool,
 // src/main.rs
 const RELOAD_CUSTOM_STATES_SCRIPT: &str = ...;   // sh + jq: prints the CustomStateSources envelope; zellaude.json missing → "{}"; *.kdl only, LC_ALL=C order
 fn reload_custom_states(&mut self) { ... }                                   // run_command with context type "reload_custom_states"; sets the in-flight flag
-fn apply_custom_state_sources(&mut self, sources: &CustomStateSources) { ... }   // custom_layouts (plugin-block precedence as today), floors, generators, both error slots; refreshes an open prompt's empty-input hint; resolves pending_submit
+fn apply_custom_state_sources(&mut self, sources: &CustomStateSources) { ... }   // custom_layouts (plugin-block precedence as today), floors, generators, both error slots; refreshes an open prompt's empty-input hint. The result arm resolves pending_submit itself, on the success and the failure path alike, so a submit deferred by a failed read is not swallowed
 fn resolve_custom_state(&self, input: &str, source: &SourceTab) -> Result<Vec<CustomLayout>, String> { ... }   // exact custom_states id → clone; else layout_generators::invoke
 fn prompt_source_tab(&self, tab_position: usize, chrome: &TabChrome) -> Option<SourceTab> { ... }   // TabInfo.name and display_area_* of that position, rows minus chrome.bar_rows
 ```
