@@ -33,7 +33,7 @@ Critics: plan=1 impl=1
 | T17 | impl1 | `src/layout_generators.rs`: name the `min_pane_height` arm in `Declarations::declare` instead of `_` (a sixth declaration node must fail to compile, not fall through); drop the unreachable `.max(1)` in `plan_rows` (`PANE_FRAME_COLUMNS` makes the sum ≥ 2). | — | [x] |
 | T18 | impl3 | Re-run the PLAN's Verification on the fixed tree (suite, wasm build, E2E), same protocol and artifacts as T11; report failures to the planner and wait. | T11, T16, T17 | [x] |
 | T19 | impl1 | From the user's CLAUDE note at `README.md:119`: the madev example's pane commands become the real launches — `claude -n impl{i} '/madev-impl impl{i}'` and `claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'` (single quotes; no KDL escapes) — in `README.md`, in the T3 fixture and its expected expansions in `tests/layout_generators.rs`, matching the PLAN's vocabulary block byte for byte; remove the note. | — | [x] |
-| T20 | impl3 | Re-run the PLAN's Verification on the tree after T19 (suite, wasm build, E2E), same protocol and artifacts as T18; report failures and wait. | T18, T19 | [ ] |
+| T20 | impl3 | Re-run the PLAN's Verification on the tree after T19 (suite, wasm build, E2E), same protocol and artifacts as T18; report failures and wait. | T18, T19 | [x] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
