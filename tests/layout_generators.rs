@@ -458,6 +458,18 @@ fn refuses_a_non_integer_missing_or_leftover_positional() {
 }
 
 
+/// A tab big enough for 64 panes under the default floors: 17 columns fit, so
+/// four rows of 13 content rows each clear the 12-row floor.
+fn wide_source(name: &str) -> SourceTab {
+    SourceTab {
+        name: name.to_string(),
+        geometry: TabGeometry {
+            columns: 1000,
+            rows: 60,
+        },
+    }
+}
+
 fn source(name: &str) -> SourceTab {
     SourceTab {
         name: name.to_string(),
@@ -679,6 +691,38 @@ fn refuses_a_source_tab_name_that_cannot_be_an_id() {
     assert_eq!(
         open(content, "g", &source(" x ")).unwrap_err(),
         "impl.kdl: tab name \" x -t\" must not start or end with whitespace"
+    );
+}
+
+#[test]
+fn refuses_more_panes_than_the_maximum_before_finishing_expansion() {
+    // The second `each` would refuse with a negative bound if it were ever
+    // reached, so seeing the pane-cap message instead is what proves expansion
+    // stopped at the 65th push rather than building all 4096 and refusing late.
+    let content = "command \"g\"\ntab \"t\" {\n each for=\"i\" in=\"1..=64\" {\n each for=\"j\" in=\"1..=64\" {\n pane \"p{i}{j}\"\n }\n }\n each for=\"k\" in=\"0..0-1\" {\n pane \"never\"\n }\n}\n";
+    assert_eq!(
+        open(content, "g", &source("src")).unwrap_err(),
+        "impl.kdl: tab \"t\" opens more than 64 panes"
+    );
+
+    // The boundary itself: 64 panes open, 65 refuse.
+    let counted = "command \"g\"\narg \"n\"\ntab \"t\" {\n each for=\"i\" in=\"1..=n\" {\n pane \"p{i}\"\n }\n}\n";
+    let full = open(counted, "g 64", &wide_source("src")).unwrap();
+    assert_eq!(commands(&full[0]).len(), 64);
+    assert_eq!(
+        open(counted, "g 65", &source("src")).unwrap_err(),
+        "impl.kdl: range \"1..=n\" runs for 65 steps; the maximum is 64"
+    );
+    // Two ranges of 8 reach 64 without either passing the per-range cap; 9x8
+    // reaches 72 and only the pane cap can speak.
+    let grid = "command \"g\"\narg \"a\"\narg \"b\"\ntab \"t\" {\n each for=\"i\" in=\"1..=a\" {\n each for=\"j\" in=\"1..=b\" {\n pane \"p{i}{j}\"\n }\n }\n}\n";
+    assert_eq!(
+        commands(&open(grid, "g 8 8", &wide_source("src")).unwrap()[0]).len(),
+        64
+    );
+    assert_eq!(
+        open(grid, "g 9 8", &source("src")).unwrap_err(),
+        "impl.kdl: tab \"t\" opens more than 64 panes"
     );
 }
 

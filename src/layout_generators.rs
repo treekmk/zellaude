@@ -505,7 +505,7 @@ fn expand_tabs(
                 };
                 validate_tab_name(&name)?;
                 let mut commands = Vec::new();
-                expand_panes(body, bindings, source, &mut commands)?;
+                expand_panes(body, bindings, source, &name, &mut commands)?;
                 if commands.is_empty() {
                     return Err(format!("tab {name:?} has no panes"));
                 }
@@ -541,6 +541,7 @@ fn expand_panes(
     nodes: &[PaneNode],
     bindings: &mut Bindings,
     source: &SourceTabText,
+    tab: &str,
     commands: &mut Vec<String>,
 ) -> Result<(), String> {
     for node in nodes {
@@ -548,6 +549,11 @@ fn expand_panes(
             PaneNode::Pane { command, condition } => {
                 if condition.holds(bindings) {
                     commands.push(render(command, bindings, &source.quoted)?);
+                    if commands.len() > MAX_PANES {
+                        return Err(format!(
+                            "tab {tab:?} opens more than {MAX_PANES} panes"
+                        ));
+                    }
                 }
             }
             PaneNode::Each {
@@ -561,7 +567,7 @@ fn expand_panes(
                 }
                 for value in evaluate_range(range, bindings)? {
                     bindings.bind_loop(variable, value);
-                    let expanded = expand_panes(body, bindings, source, commands);
+                    let expanded = expand_panes(body, bindings, source, tab, commands);
                     bindings.unbind_loop();
                     expanded?;
                 }
