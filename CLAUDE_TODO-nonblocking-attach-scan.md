@@ -17,7 +17,7 @@ Critics: plan=1 impl=1
 
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
-| T4 | impl2 | Delete the three blocking host calls (`src/attach.rs:63`, `:70`, `src/main.rs:512`) and the four symbols they orphan: `supports_pane_introspection`, `client_for_command`, `introspection_supported()`, `State::pane_introspection_supported`, with their unit tests. `run()` loses its `supports_introspection` parameter; the `pane_leaders` and `introspection_supported` context keys go; argv drops to session name plus `scan_started_ms`. Keep `get_zellij_version` (live caller in `split_three`), the 0.44 floor and the 7-element `REQUIRED_PERMISSIONS`. Update `README.md:588-589` and mark the `better-codex` spec superseded. Leave poll-era introspection prose alone — see the PLAN's out-of-scope note. | — | [ ] |
+| T4 | impl2 | Delete the three blocking host calls (`src/attach.rs:63`, `:70`, `src/main.rs:512`) and the four symbols they orphan: `supports_pane_introspection`, `client_for_command`, `introspection_supported()`, `State::pane_introspection_supported`, with their unit tests. `run()` loses its `supports_introspection` parameter; the `pane_leaders` and `introspection_supported` context keys go; argv drops to session name plus `scan_started_ms`. Keep `get_zellij_version` (live caller in `split_three`), the 0.44 floor and the 7-element `REQUIRED_PERMISSIONS`. Update `README.md:588-589` and mark the `better-codex` spec superseded. Leave poll-era introspection prose alone — see the PLAN's out-of-scope note. | — | [x] |
 
 ### Finalize (impl3)
 
