@@ -36,6 +36,8 @@ Critics: plan=1 impl=1
 | T20 | impl3 | Re-run the PLAN's Verification on the tree after T19 (suite, wasm build, E2E), same protocol and artifacts as T18; report failures and wait. | T18, T19 | [x] |
 | T21 | impl1 | `src/layout_generators.rs` only: a `BodyNode` enum with `from_node_name`; `parse_tab_nodes` and `parse_pane_nodes` match on it exhaustively (no `_` arms); the `BODY_NODES` string array retired. No behaviour change: every refusal message identical, existing tests unchanged. | — | [x] |
 | T22 | impl3 | Re-run the PLAN's Verification on the tree after T21 (suite, wasm build, E2E), same protocol and artifacts as T20. The wasm figure will exceed the pinned 1,932,476 B by the `BodyNode` enum's cost, as T17's enum cost 88 B: report the measured figure with the enum named as the cause, for the planner to re-pin — that overage is expected, not a failure to wait on. Report any other failure and wait. | T20, T21 | [x] |
+| T23 | impl1 | `src/layout_generators.rs` + `tests/layout_generators.rs`: in `expand_panes`, count panes as they are pushed and refuse the moment the count passes `MAX_PANES` — `<file>: tab "<name>" opens more than 64 panes` — mirroring the tab cap's push-site check; `CustomLayout::validate` stays as the backstop. Unit case: a nested `each` that would build 4096 panes in one tab refuses at the 65th push, before expansion completes. No other behaviour change. | — | [ ] |
+| T24 | impl3 | Re-run the PLAN's Verification on the tree after T23 (suite, wasm build, E2E), same protocol and artifacts as T22; report the wasm figure with T23 named, direction unknown, for re-pinning; report any other failure and wait. | T22, T23 | [ ] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
@@ -43,7 +45,7 @@ Critics: plan=1 impl=1
 | T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13, T14 | [x] |
 | T10 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T9 | [x] |
 | T11 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/layout-generator/`. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix, never free up resources; loop until clean. | T10, T15 | [x] |
-| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T22 | (Not possible to mark after deletion) |
+| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T24 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -74,10 +76,12 @@ graph TD
   T18 --> T20
   T21[T21 · impl1 · BodyNode enum] --> T22[T22 · impl3 · re-verify]
   T20 --> T22
-  T22 --> T12[T12 · impl3 · archive]
+  T23[T23 · impl1 · pane bound at push] --> T24[T24 · impl3 · re-verify]
+  T22 --> T24
+  T24 --> T12[T12 · impl3 · archive]
 ```
 
-ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18`; `{T18, T19} → T20`; `{T20, T21} → T22 → T12`.
+ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18`; `{T18, T19} → T20`; `{T20, T21} → T22`; `{T22, T23} → T24 → T12`.
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
