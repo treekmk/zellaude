@@ -26,12 +26,13 @@ Critics: plan=1 impl=1
 |----|-------|------|------------|--------|
 | T7 | impl1 | `README.md`: Features bullet; "Custom states" — hot reload replaces "Reload the plugin", the floors replace the Zellij-fit sentence; new "Generators" subsection documenting the PLAN's vocabulary verbatim (directory, `command`/`arg`/`flag`, `tab`/`pane`/`each`, `if`/`unless`, ranges, `{tab}` and default names, the floors chain with the `zellaude.json` keys, refusals) with the madev file as the example. | T3 | [x] |
 | T8 | impl2 | E2E harness under `/tmp/layout-generator/e2e/`: staged `HOME`, `e2e.kdl`, `grid.kdl` and `hot.kdl`, the permissions pre-grant, the python pty driver with per-case refocus, `run.sh` implementing the PLAN's three cases, preflight and cleanup; exit 0 only when every assertion holds. Run it once to prove it executes. Never staged, never in the repo. | T6 | [x] |
-| T13 | impl2 | Reload at submit in `src/main.rs`: `open_custom_layout` only records `pending_submit` and issues `reload_custom_states` (the open-time reload stays for the hint); the result arm's `resolve_pending_submit` calls the new non-deferring `launch_custom_state` (geometry, resolve, emit, launch; never reloads; no other caller), so the cycle is one deep and Enter resolves against the files as of that moment; inline test: a refusal, then a corrected document, then the same input resolves on the next Enter without cancelling. Add E2E case 4 to the harness (refuse on a broken `hot.kdl`, fix it, `Enter` again → `e2e-hot` with three panes) and run it green. | T6, T8 | [ ] |
+| T13 | impl2 | Reload at submit in `src/main.rs`: `open_custom_layout` only records `pending_submit` and issues `reload_custom_states` (the open-time reload stays for the hint); the result arm's `resolve_pending_submit` calls the new non-deferring `launch_custom_state` (geometry, resolve, emit, launch; never reloads; no other caller), so the cycle is one deep and Enter resolves against the files as of that moment; inline test: a refusal, then a corrected document, then the same input resolves on the next Enter without cancelling. Add E2E case 4 to the harness (`hot.kdl` gains `min_pane_height 40` so `hot 3` refuses with `does not fit`; remove the line, `Enter` again with no other key → a new tab id named `e2e-hot` with exactly three panes, asserted by tab id) and run it green. | T6, T8 | [ ] |
+| T14 | impl1 | `README.md` only: the two sentences that say files are re-read each time the prompt opens (the Custom states paragraph at `:79` and the Generators intro) become: "Zellaude re-reads this file, and every generator file, when the prompt opens and again on every Enter, so an edit applies to the next submit without reloading the plugin or restarting the session. A refusal leaves the prompt open with what you typed, so you can fix the file it names and press Enter again." and "Files are re-read when the prompt opens and again on Enter, so a new generator works without restarting anything, and an edit lands on the very next submit." | T13 | [ ] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
-| T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13 | [ ] |
+| T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13, T14 | [ ] |
 | T10 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T9 | [ ] |
 | T11 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/layout-generator/`. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix, never free up resources; loop until clean. | T10 | [ ] |
 | T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T11 | (Not possible to mark after deletion) |
@@ -51,14 +52,16 @@ graph TD
   T6 --> T8[T8 · impl2 · E2E harness]
   T6 --> T13[T13 · impl2 · reload at submit]
   T8 --> T13
+  T13 --> T14[T14 · impl1 · README reload wording]
   T7 --> T9[T9 · impl3 · merge]
   T13 --> T9
+  T14 --> T9
   T9 --> T10[T10 · impl3 · compact-comments]
   T10 --> T11[T11 · impl3 · verify]
   T11 --> T12[T12 · impl3 · archive]
 ```
 
-ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13`; `{T7, T13} → T9 → T10 → T11 → T12`.
+ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11 → T12`.
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
