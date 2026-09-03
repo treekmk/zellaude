@@ -29,6 +29,9 @@ Critics: plan=1 impl=1
 | T13 | impl2 | Reload at submit in `src/main.rs`: `open_custom_layout` only records `pending_submit` and issues `reload_custom_states` (the open-time reload stays for the hint); the result arm's `resolve_pending_submit` calls the new non-deferring `launch_custom_state` (geometry, resolve, emit, launch; never reloads; no other caller), so the cycle is one deep and Enter resolves against the files as of that moment; inline test: a refusal, then a corrected document, then the same input resolves on the next Enter without cancelling. Add E2E case 4 to the harness (`hot.kdl` gains `min_pane_height 40` so `hot 3` refuses with `does not fit`; remove the line, `Enter` again with no other key → a new tab id named `e2e-hot` with exactly three panes, asserted by tab id) and run it green. | T6, T8 | [x] |
 | T14 | impl1 | `README.md` only: the two sentences that say files are re-read each time the prompt opens (the Custom states paragraph at `:79` and the Generators intro) become: "Zellaude re-reads this file, and every generator file, when the prompt opens and again on every Enter, so an edit applies to the next submit without reloading the plugin or restarting the session. A refusal leaves the prompt open with what you typed, so you can fix the file it names and press Enter again." and "Files are re-read when the prompt opens and again on Enter, so a new generator works without restarting anything, and an edit lands on the very next submit." | T13 | [x] |
 | T15 | impl1 | `Cargo.toml` only: replace the `kdl` line's comment ("Already compiled in through zellij-utils, which does not re-export it.") with "In the dependency tree via zellij-utils, which neither re-exports it nor links it — first real use costs ~153 KiB of wasm." (rev 11 retracted the premise the old comment states). | — | [x] |
+| T16 | impl2 | `src/main.rs`: rewrite `RELOAD_CUSTOM_STATES_SCRIPT` so nothing large goes through argv: `zellaude.json` read with `--rawfile` (a missing file selects `--arg settings '{}'` in the shell), one `{path, content}` object per generator file emitted into a pipe (`--rawfile content`, path in argv is fine), the stream wrapped once with `jq -s`; inline test: a 200 KiB generator file AND a 200 KiB `zellaude.json` round-trip intact (a single argv string fails at 128 KiB, measured E2BIG at 200,000 bytes; the repo's own save test already writes ~150 KB). `src/custom_layouts.rs`: one comment line on `to_kdl` saying why both `#[cfg(test)]` and `#[allow(dead_code)]` are needed (the `src/main.rs --test` build calls nothing). | — | [ ] |
+| T17 | impl1 | `src/layout_generators.rs`: name the `min_pane_height` arm in `Declarations::declare` instead of `_` (a sixth declaration node must fail to compile, not fall through); drop the unreachable `.max(1)` in `plan_rows` (`PANE_FRAME_COLUMNS` makes the sum ≥ 2). | — | [ ] |
+| T18 | impl3 | Re-run the PLAN's Verification on the fixed tree (suite, wasm build, E2E), same protocol and artifacts as T11; report failures to the planner and wait. | T11, T16, T17 | [ ] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
@@ -36,7 +39,7 @@ Critics: plan=1 impl=1
 | T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13, T14 | [x] |
 | T10 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T9 | [x] |
 | T11 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/layout-generator/`. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix, never free up resources; loop until clean. | T10, T15 | [x] |
-| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T11 | (Not possible to mark after deletion) |
+| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T18 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -60,10 +63,13 @@ graph TD
   T9 --> T10[T10 · impl3 · compact-comments]
   T10 --> T11[T11 · impl3 · verify]
   T15[T15 · impl1 · Cargo.toml comment] --> T11
-  T11 --> T12[T12 · impl3 · archive]
+  T16[T16 · impl2 · linear reload script] --> T18[T18 · impl3 · re-verify]
+  T17[T17 · impl1 · declare arm, plan_rows] --> T18
+  T11 --> T18
+  T18 --> T12[T12 · impl3 · archive]
 ```
 
-ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11 → T12`; `T15 → T11`.
+ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18 → T12`.
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
