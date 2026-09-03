@@ -1,7 +1,8 @@
 //! Generator files: one KDL file per generator under the plugin's `generators`
-//! directory, re-parsed on every prompt open. A file declares its prompt-line
-//! vocabulary, then a body of `tab`/`pane`/`each` nodes that expands into the
-//! tabs an invocation opens.
+//! directory, re-parsed when the prompt opens and again on every Enter, so an
+//! edit lands on the next submit. A file declares its prompt-line vocabulary,
+//! then a body of `tab`/`pane`/`each` nodes that expands into the tabs an
+//! invocation opens.
 
 use kdl::{KdlDocument, KdlNode, KdlValue};
 use serde::Deserialize;

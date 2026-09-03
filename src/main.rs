@@ -811,7 +811,6 @@ impl State {
         )
     }
 
-    /// Open the state the user submitted while this reload was still in flight.
     fn resolve_pending_submit(&mut self) {
         let pending = self
             .custom_layout_prompt

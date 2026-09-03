@@ -516,8 +516,8 @@ pub struct Prompt {
     pub error: Option<String>,
     pub return_pane_id: u32,
     pub cwd: Option<String>,
-    /// Input submitted while a custom-state reload was in flight; opened once
-    /// the reload lands.
+    /// Every submitted input: Enter records it here and reloads, and the
+    /// reload's result opens it.
     pub pending_submit: Option<String>,
     focus_acquired: bool,
     focus_requested_ms: Option<u64>,
