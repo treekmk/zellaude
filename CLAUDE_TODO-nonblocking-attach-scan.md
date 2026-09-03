@@ -1,0 +1,47 @@
+## TODOs: Non-blocking attach scan
+
+Status legend: `[ ]` pending · `[x]` done. Each row flips inside its own commit —
+by the row's owner where its role is ungated, by that owner's critic on APPROVE
+where the `Critics:` line arms it.
+Critics: plan=1 impl=1
+
+### Phase 1 — attach script and hook (impl1)
+
+| ID | Agent | Task | Depends on | Status |
+|----|-------|------|------------|--------|
+| T1 | impl1 | Normalize `comm` by basename in `find_agent_pid` (`scripts/zellaude-hook.sh:283-285`) so the `claude*\|codex*` match works whether `ps -o comm=` returns a full path or a bare name. `ucomm` is forbidden — it returns the rewritten process title (`2.1.191` measured on macOS). Cover it in `tests/hook_mode_detection.sh` with the argument-branching `ps` stub the PLAN's Verification specifies. Until this lands the validator does nothing on macOS. | — | [ ] |
+| T2 | impl1 | Replace the pane-record drive loop in `scripts/zellaude-attach.sh` with `list_pane_processes`: one batched `/proc/*/environ` pass, Linux-only behind the existing `uname` gate, selecting each pane's `claude`/`codex` processes directly. Retire `foreground_pid` and the depth-64 parent climb; keep `proc_stat_value`, which `discover_claude` still needs. Rework the fixtures in `tests/attach_detection.sh` to model whole pane process sets. | — | [ ] |
+| T3 | impl1 | Replace the cached-state cross-check with `cached_agent_is_gone` — common to both platforms, no `uname` branch, dropping only on positive evidence per the PLAN's rules. Add `agent_pid` and `host` to the `emit_cached_states` jq projection. Delete `record_client_for_pane` and argv `$2`; `scan_started_ms` becomes `$2`. Carry the same `comm` basename rule as T1 and the second `ps` stub. The T1 edge buys rule continuity and macOS runtime efficacy, not testability — T3 ships its own stub and is testable without it. | T1, T2 | [ ] |
+
+### Phase 2 — plugin (impl2)
+
+| ID | Agent | Task | Depends on | Status |
+|----|-------|------|------------|--------|
+| T4 | impl2 | Delete the three blocking host calls (`src/attach.rs:63`, `:70`, `src/main.rs:512`) and the four symbols they orphan: `supports_pane_introspection`, `client_for_command`, `introspection_supported()`, `State::pane_introspection_supported`, with their unit tests. `run()` loses its `supports_introspection` parameter; the `pane_leaders` and `introspection_supported` context keys go; argv drops to session name plus `scan_started_ms`. Keep `get_zellij_version` (live caller in `split_three`), the 0.44 floor and the 7-element `REQUIRED_PERMISSIONS`. Update `README.md:588-589` and mark the `better-codex` spec superseded. Leave poll-era introspection prose alone — see the PLAN's out-of-scope note. | — | [ ] |
+
+### Finalize (impl3)
+
+| ID | Agent | Task | Depends on | Status |
+|----|-------|------|------------|--------|
+| T5 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. Expect friction in `README.md` and `tests/hook_mode_detection.sh`, both edited on either side. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T3, T4 | [ ] |
+| T6 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T5 | [ ] |
+| T7 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — both legs, preflight first, artifacts to `/tmp/nonblocking-attach-scan/`. Re-run `tests/hook_mode_detection.sh` after the merge rather than trusting any pre-merge green. On failure or a non-discriminating base arm, report to the planner and wait — never self-fix, never make room. | T6 | [ ] |
+| T8 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T7 | (Not possible to mark after deletion) |
+
+**Dependency graph**
+
+```mermaid
+graph TD
+  T1[T1 · impl1 · comm basename] --> T3[T3 · impl1 · common validator]
+  T2[T2 · impl1 · /proc walk] --> T3
+  T3 --> T5[T5 · impl3 · merge develop]
+  T4[T4 · impl2 · plugin] --> T5
+  T5 --> T6[T6 · impl3 · compact-comments]
+  T6 --> T7[T7 · impl3 · verify]
+  T7 --> T8[T8 · impl3 · archive]
+```
+
+**Launch order** — open every session at once; blocked ones idle on `wait-for`.
+- `impl1` — entry T1 (—) · `impl1-crit1`
+- `impl2` — entry T4 (—) · `impl2-crit1`
+- `impl3` — entry T5 (waits on T3, T4) · `impl3-crit1`
