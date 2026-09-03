@@ -24,7 +24,7 @@ Critics: plan=1 impl=1
 ### Phase 4 — Docs and E2E harness
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
-| T7 | impl1 | `README.md`: Features bullet; "Custom states" — hot reload replaces "Reload the plugin", the floors replace the Zellij-fit sentence; new "Generators" subsection documenting the PLAN's vocabulary verbatim (directory, `command`/`arg`/`flag`, `tab`/`pane`/`each`, `if`/`unless`, ranges, `{tab}` and default names, the floors chain with the `zellaude.json` keys, refusals) with the madev file as the example. | T3 | [ ] |
+| T7 | impl1 | `README.md`: Features bullet; "Custom states" — hot reload replaces "Reload the plugin", the floors replace the Zellij-fit sentence; new "Generators" subsection documenting the PLAN's vocabulary verbatim (directory, `command`/`arg`/`flag`, `tab`/`pane`/`each`, `if`/`unless`, ranges, `{tab}` and default names, the floors chain with the `zellaude.json` keys, refusals) with the madev file as the example. | T3 | [x] |
 | T8 | impl2 | E2E harness under `/tmp/layout-generator/e2e/`: staged `HOME`, `e2e.kdl`, `grid.kdl` and `hot.kdl`, the permissions pre-grant, the python pty driver with per-case refocus, `run.sh` implementing the PLAN's three cases, preflight and cleanup; exit 0 only when every assertion holds. Run it once to prove it executes. Never staged, never in the repo. | T6 | [ ] |
 
 ### Finalize

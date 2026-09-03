@@ -13,7 +13,7 @@ A Zellij status bar plugin that replaces the default tab bar with Claude Code an
 - **Theme-aware palette** — follows Zellij's live theme colors; Gruvbox Dark is explicitly verified
 - **Ultra-mode rainbow** — tab names shimmer through rainbow colors for Codex `ultra` sessions and Claude Code `ultracode` sessions
 - **Split Three** — upgraded Pane-mode versions of Split Right and Split Down create three equal panes at once
-- **Custom states** — open a named command grid in a new tab with `Ctrl+t`, `Shift+n`
+- **Custom states** — open a named command grid in a new tab with `Ctrl+t`, `Shift+n`; generator files expand one CLI-style line into a set of tabs, each laid out to fit the live tab size
 - **Session templates** — describe a multi-tab session once and start it with `zellij -s work -n <name>`
 - **Clickable tabs** — click any tab to switch to it
 - **Smart pane focus** — clicking an agent-aware tab focuses its most recently active Claude Code or Codex pane, revealing it inside a stack; waiting (⚠) sessions retain priority
@@ -76,11 +76,11 @@ Add one or more named states to `~/.config/zellij/plugins/zellaude.json`:
 }
 ```
 
-Reload the plugin (or restart the Zellij session) after editing the file. Then press `Ctrl+t`, `Shift+n`, type the state ID, and press `Enter`. Zellaude opens a new tab with the configured grid, mapping the command array to panes from left to right, top to bottom. Press `Esc` or `Ctrl+c` to cancel the prompt.
+Zellaude re-reads this file, and every generator file, each time the prompt opens, so an edit applies to the next `Ctrl+t`, `Shift+n` without reloading the plugin or restarting the session. Press `Ctrl+t`, `Shift+n`, type the state ID, and press `Enter`. Zellaude opens a new tab with the configured grid, mapping the command array to panes from left to right, top to bottom. Press `Esc` or `Ctrl+c` to cancel the prompt.
 
 The new tab repeats the bars of the tab it was opened from — Zellaude above the grid, Zellij's status bar below it. Zellij parses a plugin-created layout on its own, so a generated tab never inherits `default_tab_template`; anything the layout leaves out is simply missing from that tab.
 
-`width` and `height` may be JSON numbers or numeric strings. A state needs at least one command, the command count may not exceed `width × height`, and a state may contain at most 64 panes; the resulting grid must also fit the current terminal. When there are fewer commands than cells, the unused bottom-right cells open as normal shell panes.
+`width` and `height` may be JSON numbers or numeric strings. A state needs at least one command, the command count may not exceed `width × height`, and a state may contain at most 64 panes; Zellij has to fit the resulting grid in the tab. A state's grid is laid out exactly as configured — the minimum-pane floors described under [Generators](#generators) apply only to generated tabs. When there are fewer commands than cells, the unused bottom-right cells open as normal shell panes.
 
 For counts that don't fill a rectangle, `commands` may instead be an array of arrays. Each inner array is one row, and the row shapes are the layout — rows may hold different pane counts, each row splits its full width equally among its panes, and no filler cells appear:
 
@@ -109,6 +109,105 @@ plugin location="file:~/.config/zellij/plugins/zellaude.wasm" {
 ```
 
 Zellaude installs `Shift+n` in Tab mode for the running client without changing `config.kdl`. If that key already has a user binding, the user binding wins and the custom-state shortcut remains unavailable.
+
+### Generators
+
+A generator turns one prompt line into a whole layout. Put one KDL file per generator in `~/.config/zellij/plugins/zellaude/generators/`; the first word of the line picks the file and the rest are its arguments. Files are re-read every time the prompt opens, so a new generator works without restarting anything.
+
+`~/.config/zellij/plugins/zellaude/generators/madev.kdl`:
+
+```kdl
+command "impl"
+arg "n"
+flag "crit-per-impl" value="m" default=1
+flag "single-tab"
+flag "only-crit" optional-value="from" default=1
+min_pane_width 54
+min_pane_height 12
+
+tab "{tab}-impl" unless="single_tab only_crit" {
+    each for="i" in="1..=n" {
+        pane "claude -n impl{i}"
+    }
+}
+each for="k" in="from..from+m" {
+    tab "{tab}-crit{k}" unless="single_tab" {
+        each for="i" in="1..=n" {
+            pane "claude -n impl{i}-crit{k}"
+        }
+    }
+}
+tab if="single_tab" {
+    each for="i" in="1..=n" {
+        pane "claude -n impl{i}" unless="only_crit"
+        each for="k" in="from..from+m" {
+            pane "claude -n impl{i}-crit{k}"
+        }
+    }
+}
+```
+
+Opened from a tab named `work`, that file answers:
+
+| Prompt line | Tabs it opens |
+| --- | --- |
+| `impl 4 --crit-per-impl 2` | `work-impl`, `work-crit1`, `work-crit2`, four panes each |
+| `impl 4 --single-tab` | `work-1`, holding eight panes: impl1, impl1-crit1, impl2, impl2-crit1, … |
+| `impl 4 --crit-per-impl 2 --only-crit 2` | `work-crit2` and `work-crit3` only |
+
+KDL wants a node terminator before a closing brace on the same line, so write blocks across lines as above, or end the inner node with a semicolon: `tab { pane "a"; }`.
+
+#### Declarations
+
+Declarations come first, before any `tab`, `pane` or `each`:
+
+| Node | Meaning |
+| --- | --- |
+| `command "impl"` | the first word of the prompt line; unique across files |
+| `arg "n"` | a positional integer, required, in declaration order |
+| `flag "crit-per-impl" value="m" default=1` | `--crit-per-impl <int>`, bound to `m`. `default` supplies the value when the flag is absent; a `value` flag without a `default` is required on the line |
+| `flag "single-tab"` | a flag that carries no value |
+| `flag "only-crit" optional-value="from" default=1` | `--only-crit [<int>]`: the value may be left off and `default` then supplies it. `optional-value` without a `default` is an error, since the bare form would leave `from` unbound |
+| `min_pane_width 54`, `min_pane_height 12` | this file's minimum pane size, in content cells |
+
+Every flag also declares a **presence** variable named after it, with `-` replaced by `_`, so `single-tab` gives `single_tab`. Presences are what `if` and `unless` test. Integers — positionals, flag values and `each` variables — are what `{…}` substitutes and what ranges count over. Using either kind in the other's place is an error, as is naming anything twice.
+
+#### Body
+
+`tab` sits at the top level, or inside an `each` that does; `pane` sits inside a `tab`; `each` nests anywhere. All three accept `if="a b"`, true when every named presence was given, and `unless="a b"`, true when none was — a false condition on an `each` skips its whole expansion.
+
+A `tab` with a name argument takes a template. One without is named `<source tab>-<ordinal>`, counting the tabs the line opens from 1, which is where `work-1` above comes from.
+
+`each for="k" in="from..from+m"` counts over a Rust-style range: `a..b` stops before `b`, `a..=b` includes it. Each end is an integer or a variable, optionally plus or minus one more term — one operator, no chaining. An empty range expands to nothing; a negative or overflowing bound refuses.
+
+A `tab` that ends up with no panes refuses, and so does a line that opens no tabs at all.
+
+#### Substitution
+
+`{name}` is replaced for the names a file declares, plus the built-in `{tab}` — the name of the tab the prompt was opened from. **Anything else in braces is left alone**, so `${HOME}` and `{a,b}` reach the shell untouched. That is also the one place the language stays quiet rather than refusing: a misspelt `{crti}` is passed through as text instead of reported.
+
+`{tab}` goes into a tab name raw and into a command single-quoted, so no tab name can change how `sh -lc` parses the command around it. Being a name rather than a number, it belongs only in templates: it cannot be tested by `if` or counted over in a range.
+
+#### Pane size
+
+Zellaude plans each generated tab from the live size of the tab the prompt was opened in. It fits as many columns as `min_pane_width` allows, splits the panes into rows with the larger rows last, and refuses with `does not fit` when a pane would fall below either floor. Floors are taken from the generator file first, then from the top level of `zellaude.json`, then from the built-in 54 × 12:
+
+```json
+{
+  "min_pane_width": 100,
+  "min_pane_height": 5
+}
+```
+
+#### Limits and refusals
+
+Two separate limits share the number 64. A single `each` may not run for more than 64 steps, checked before the range runs; and one prompt line may not open more than 64 tabs, checked as each tab is created. Nesting is why both exist: `each` inside `each` multiplies past the first limit, and the second catches the product. A tab still holds at most 64 panes, as a fixed state does. A typo such as `impl 1000000000` therefore costs nothing.
+
+On the line itself, positionals fill in declaration order and may sit among the flags, which may come in any order. An unknown flag, a missing required flag, a missing or non-integer value, a repeated flag, or a leftover argument all refuse. A flag whose value is optional takes the next token whenever it reads as an integer, so write `impl 4 --only-crit`, not `impl --only-crit 4`.
+
+Every refusal from a generator names the file it came from, so `madev.kdl: unknown node "pnae"` points at the file to fix. A file that fails to parse holds back the whole set: Zellaude reports the error and keeps the generators from the last successful read, so one broken file never silently drops the others. A line matching no state and no generator refuses on its own, without a file name.
+
+Generator files run their pane commands through `sh -lc`, exactly as custom states do, and are equally trusted local shell code. The file itself contains nothing Zellaude evaluates: every value in it is an integer, a presence, or a tab name.
 
 ### Session templates
 
