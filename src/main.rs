@@ -76,23 +76,31 @@ trap - 0 HUP INT TERM
 "#;
 /// Print the `CustomStateSources` envelope: the raw zellaude.json text and
 /// every generator file, so the plugin's own parsers keep receiving the raw
-/// documents. `LC_ALL=C` makes the file order byte order rather than the
-/// caller's locale.
+/// documents. No document travels in argv -- one argument caps at 128 KiB and
+/// a custom-state file can exceed that -- so each is read with `--rawfile` into
+/// a buffer file that one `jq -s` then wraps. Only the paths are arguments,
+/// bounded by `PATH_MAX`. The buffer is a file rather than a pipe so `set -e`
+/// still governs the loop: a pipeline reports its last stage, so a file that
+/// cannot be read would exit 0 with the envelope silently short, and
+/// `apply_custom_state_sources` would take that as the complete current state
+/// and drop the generators it does not name. `LC_ALL=C` makes the file order
+/// byte order rather than the caller's locale.
 const RELOAD_CUSTOM_STATES_SCRIPT: &str = r#"
 set -eu
 LC_ALL=C
 export LC_ALL
 config_path="$HOME/.config/zellij/plugins/zellaude.json"
 generators_dir="$HOME/.config/zellij/plugins/zellaude/generators"
-settings_json=$(cat "$config_path" 2>/dev/null || printf '%s' '{}')
-generator_files='[]'
+set -- --rawfile settings "$config_path"
+[ -f "$config_path" ] || set -- --arg settings '{}'
+stream=$(mktemp)
+trap 'rm -f "$stream"' 0 HUP INT TERM
 for path in "$generators_dir"/*.kdl; do
     [ -f "$path" ] || continue
-    generator_files=$(jq -n --argjson files "$generator_files" --arg path "$path" \
-        --rawfile content "$path" '$files + [{path: $path, content: $content}]')
+    jq -n --arg path "$path" --rawfile content "$path" \
+        '{path: $path, content: $content}' >> "$stream"
 done
-jq -n --arg settings "$settings_json" --argjson files "$generator_files" \
-    '{settings_json: $settings, generator_files: $files}'
+jq -s "$@" '{settings_json: $settings, generator_files: .}' < "$stream"
 "#;
 
 fn split_three_focus_matches(tab_id: usize, pane_id: u32) -> bool {
@@ -2119,6 +2127,19 @@ mod tests {
             .unwrap()
     }
 
+    fn temp_home(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "zellaude-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(home.join(".config/zellij/plugins/zellaude/generators")).unwrap();
+        home
+    }
+
     fn generator_sources(
         settings_json: &str,
         generator: &str,
@@ -2319,16 +2340,8 @@ mod tests {
 
     #[test]
     fn custom_state_reload_reads_zellaude_json_and_every_generator_file() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let home = std::env::temp_dir().join(format!(
-            "zellaude-reload-custom-states-{}-{unique}",
-            std::process::id()
-        ));
+        let home = temp_home("reload-custom-states");
         let generators = home.join(".config/zellij/plugins/zellaude/generators");
-        std::fs::create_dir_all(&generators).unwrap();
         // "B" before "a" is byte order; a collating locale inverts it, so this
         // pair proves LC_ALL=C rather than mere determinism.
         std::fs::write(generators.join("B.kdl"), "command \"B\"\n").unwrap();
@@ -2361,6 +2374,99 @@ mod tests {
             serde_json::from_slice(&run_reload_custom_states_script(&home).stdout).unwrap();
         assert_eq!(sources.settings_json, r#"{"min_pane_width": 100}"#);
         assert_eq!(sources.generator_files.len(), 2);
+
+        // Neither document may travel in argv: one argument caps at 128 KiB,
+        // and a custom-state file legitimately runs past that.
+        let bulk = "x".repeat(200_000);
+        let big_generator = format!("command \"a\"\n// {bulk}\n");
+        let big_settings = format!("{{\"pad\": \"{bulk}\"}}");
+        std::fs::write(generators.join("a.kdl"), &big_generator).unwrap();
+        std::fs::write(&config_path, &big_settings).unwrap();
+        let output = run_reload_custom_states_script(&home);
+        assert!(
+            output.status.success(),
+            "reload failed on large documents: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sources: layout_generators::CustomStateSources =
+            serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(sources.settings_json, big_settings);
+        let restored = sources
+            .generator_files
+            .iter()
+            .find(|file| file.path.ends_with("a.kdl"))
+            .expect("the large generator file must survive the round trip");
+        assert_eq!(restored.content, big_generator);
+
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    /// A short envelope is worse than no envelope: `apply_custom_state_sources`
+    /// takes a successful read as the complete current state, so a truncated
+    /// one deletes working generators instead of keeping the last good set.
+    #[cfg(unix)]
+    #[test]
+    fn custom_state_reload_refuses_rather_than_truncating_on_an_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = temp_home("reload-unreadable");
+        let generators = home.join(".config/zellij/plugins/zellaude/generators");
+        for name in ["a.kdl", "b.kdl", "c.kdl"] {
+            std::fs::write(generators.join(name), format!("command \"{name}\"\n")).unwrap();
+        }
+        let blocked = generators.join("b.kdl");
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&blocked).is_ok() {
+            std::fs::remove_dir_all(&home).unwrap(); // running as root; the mode proves nothing
+            return;
+        }
+
+        let output = run_reload_custom_states_script(&home);
+        assert!(
+            !output.status.success(),
+            "an unreadable file must refuse the whole envelope"
+        );
+        assert!(
+            serde_json::from_slice::<layout_generators::CustomStateSources>(&output.stdout)
+                .is_err(),
+            "a failed read must not print an envelope at all"
+        );
+
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn custom_state_reload_survives_many_modest_generator_files() {
+        // The accumulation, not any single file, is what overflowed argv: the
+        // whole envelope was passed back in on every iteration, so forty 4 KB
+        // files broke it with nothing large in sight. A per-file test cannot
+        // see that -- after the rewrite each file goes to the pipe alone.
+        let home = temp_home("reload-many-generators");
+        let generators = home.join(".config/zellij/plugins/zellaude/generators");
+        let expected: Vec<String> = (0..40)
+            .map(|index| format!("command \"m{index:02}\"\n// {}\n", "x".repeat(4096)))
+            .collect();
+        for (index, content) in expected.iter().enumerate() {
+            std::fs::write(generators.join(format!("m{index:02}.kdl")), content).unwrap();
+        }
+
+        let output = run_reload_custom_states_script(&home);
+        assert!(
+            output.status.success(),
+            "reload failed on 40 modest files: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sources: layout_generators::CustomStateSources =
+            serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            sources
+                .generator_files
+                .iter()
+                .map(|file| file.content.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
 
         std::fs::remove_dir_all(&home).unwrap();
     }

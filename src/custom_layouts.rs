@@ -197,7 +197,9 @@ impl CustomLayout {
     }
 
     /// The single-tab form of `tabs_to_kdl`, which the tests exercise; the
-    /// plugin itself always emits through `tabs_to_kdl`.
+    /// plugin itself always emits through `tabs_to_kdl`. `cfg(test)` keeps it
+    /// out of the shipped wasm; `allow(dead_code)` covers the `src/main.rs`
+    /// `--test` build, which compiles this module but calls it from nowhere.
     #[cfg(test)]
     #[allow(dead_code)]
     pub fn to_kdl(
