@@ -32,6 +32,8 @@ Critics: plan=1 impl=1
 | T16 | impl2 | `src/main.rs`: rewrite `RELOAD_CUSTOM_STATES_SCRIPT` so nothing large goes through argv: `zellaude.json` read with `--rawfile` (a missing file selects `--arg settings '{}'` in the shell), one `{path, content}` object per generator file emitted into a pipe (`--rawfile content`, path in argv is fine), the stream wrapped once with `jq -s`; inline test: a 200 KiB generator file AND a 200 KiB `zellaude.json` round-trip intact (a single argv string fails at 128 KiB, measured E2BIG at 200,000 bytes; the repo's own save test already writes ~150 KB). `src/custom_layouts.rs`: one comment line on `to_kdl` saying why both `#[cfg(test)]` and `#[allow(dead_code)]` are needed (the `src/main.rs --test` build calls nothing). | — | [x] |
 | T17 | impl1 | `src/layout_generators.rs`: name the `min_pane_height` arm in `Declarations::declare` instead of `_` (a sixth declaration node must fail to compile, not fall through); drop the unreachable `.max(1)` in `plan_rows` (`PANE_FRAME_COLUMNS` makes the sum ≥ 2). | — | [x] |
 | T18 | impl3 | Re-run the PLAN's Verification on the fixed tree (suite, wasm build, E2E), same protocol and artifacts as T11; report failures to the planner and wait. | T11, T16, T17 | [x] |
+| T19 | impl1 | From the user's CLAUDE note at `README.md:119`: the madev example's pane commands become the real launches — `claude -n impl{i} '/madev-impl impl{i}'` and `claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'` (single quotes; no KDL escapes) — in `README.md`, in the T3 fixture and its expected expansions in `tests/layout_generators.rs`, matching the PLAN's vocabulary block byte for byte; remove the note. | — | [ ] |
+| T20 | impl3 | Re-run the PLAN's Verification on the tree after T19 (suite, wasm build, E2E), same protocol and artifacts as T18; report failures and wait. | T18, T19 | [ ] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
@@ -39,7 +41,7 @@ Critics: plan=1 impl=1
 | T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13, T14 | [x] |
 | T10 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T9 | [x] |
 | T11 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/layout-generator/`. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix, never free up resources; loop until clean. | T10, T15 | [x] |
-| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T18 | (Not possible to mark after deletion) |
+| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T20 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -66,10 +68,12 @@ graph TD
   T16[T16 · impl2 · linear reload script] --> T18[T18 · impl3 · re-verify]
   T17[T17 · impl1 · declare arm, plan_rows] --> T18
   T11 --> T18
-  T18 --> T12[T12 · impl3 · archive]
+  T19[T19 · impl1 · madev launch prompts] --> T20[T20 · impl3 · re-verify]
+  T18 --> T20
+  T20 --> T12[T12 · impl3 · archive]
 ```
 
-ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18 → T12`.
+ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18`; `{T18, T19} → T20 → T12`.
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
