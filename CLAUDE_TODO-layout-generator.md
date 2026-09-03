@@ -13,7 +13,7 @@ Critics: plan=1 impl=1
 ### Phase 2 — Multi-tab emission
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
-| T4 | impl2 | `src/custom_layouts.rs`: `tabs_to_kdl` (one `tab name=<id>` per entry, `focus=true` on the first only), `CustomLayout::to_kdl` delegating through `slice::from_ref`, `TabChrome::bar_rows`, and the `Prompt.pending_submit` field initialised in `Prompt::new`. `tests/custom_layouts.rs`: two-tab round-trip with `parsed.tabs.len() == 2` and one focused tab, one-tab output byte-identical to before, `bar_rows` with and without the plugin's own bar. | — | [ ] |
+| T4 | impl2 | `src/custom_layouts.rs`: `tabs_to_kdl` (one `tab name=<id>` per entry, `focus=true` on the first only), `CustomLayout::to_kdl` delegating through `slice::from_ref`, `TabChrome::bar_rows`, and the `Prompt.pending_submit` field initialised in `Prompt::new`. `tests/custom_layouts.rs`: two-tab round-trip with `parsed.tabs.len() == 2` and one focused tab, one-tab output byte-identical to before, `bar_rows` with and without the plugin's own bar. | — | [x] |
 
 ### Phase 3 — Reload and submit
 | ID | Agent | Task | Depends on | Status |
