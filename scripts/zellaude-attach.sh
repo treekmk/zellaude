@@ -33,11 +33,6 @@ proc_stat_value() {
     awk -v field="$field_after_comm" '{ print $field }'
 }
 
-foreground_pid() {
-  # /proc/<pid>/stat field 8 is tpgid; after removing pid+comm it is field 6.
-  proc_stat_value "$1" 6
-}
-
 valid_nonnegative_number() {
   case "$1" in
     ''|*[!0-9]*) return 1 ;;
@@ -140,6 +135,42 @@ emit_cached_states
 # use the bounded, command-matched hook cache above.
 [ "$(uname)" = "Linux" ] || exit 0
 [ -d "$PROC_ROOT" ] || exit 0
+
+# Every claude/codex process of this session, as "pane_id<TAB>pid<TAB>client",
+# ascending by pane then pid. Two batched greps, never a per-process read loop:
+# bash falls back to one-byte reads on unseekable /proc files, which costs 20.3 s
+# where this costs 22 ms for 528 processes.
+list_pane_processes() {
+  {
+    grep -sxH -e claude -e codex "$PROC_ROOT"/*/comm
+    grep -szH -e '^ZELLIJ_SESSION_NAME=' -e '^ZELLIJ_PANE_ID=' \
+      "$PROC_ROOT"/*/environ | tr '\0' '\n'
+  } | awk -v session="$SESSION_NAME" '
+    {
+      separator = index($0, ":")
+      if (separator == 0) next
+      path = substr($0, 1, separator - 1)
+      record = substr($0, separator + 1)
+      depth = split(path, components, "/")
+      process_id = components[depth - 1]
+      if (components[depth] == "comm") {
+        client[process_id] = record
+      } else if (record ~ /^ZELLIJ_SESSION_NAME=/) {
+        process_session[process_id] = substr(record, 21)
+      } else {
+        pane[process_id] = substr(record, 16)
+      }
+    }
+    END {
+      for (process_id in client) {
+        if (process_id !~ /^[0-9]+$/) continue
+        if (process_session[process_id] != session) continue
+        if (pane[process_id] == "") continue
+        printf "%s\t%s\t%s\n", pane[process_id], process_id, client[process_id]
+      }
+    }
+  ' | sort -k1,1n -k2,2n
+}
 
 process_matches_pane() {
   local process_id=$1 pane_id=$2 process_session process_pane
@@ -406,49 +437,20 @@ discover_claude() {
   printf '%s\n' "$payload" | emit_live_payload
 }
 
-remaining=$PANE_RECORDS
-while [ -n "$remaining" ]; do
-  case "$remaining" in
-    *,*)
-      record=${remaining%%,*}
-      remaining=${remaining#*,}
-      ;;
-    *)
-      record=$remaining
-      remaining=""
-      ;;
-  esac
+PANE_PROCESSES=$(list_pane_processes)
 
-  pane_id=${record%%:*}
-  record_tail=${record#*:}
-  leader_pid=${record_tail%%:*}
-  client=${record_tail#*:}
+# A pane is claimed by the lowest-pid candidate that discovers a session; later
+# members of the same set are skipped whether or not they would discover too.
+declare -A pane_discovered=()
+while IFS=$'\t' read -r pane_id process_id client; do
   valid_nonnegative_number "$pane_id" || continue
-  valid_positive_number "$leader_pid" || continue
+  valid_positive_number "$process_id" || continue
+  [ -z "${pane_discovered[$pane_id]+present}" ] || continue
+
   case "$client" in
-    codex|claude|unknown) ;;
+    codex) discover_codex "$pane_id" "$process_id" || continue ;;
+    claude) discover_claude "$pane_id" "$process_id" || continue ;;
     *) continue ;;
   esac
-
-  process_id=$(foreground_pid "$leader_pid")
-  valid_positive_number "$process_id" || continue
-  depth=0
-  while valid_positive_number "$process_id" && [ "$depth" -lt 64 ]; do
-    process_name=$(cat "$PROC_ROOT/$process_id/comm" 2>/dev/null || true)
-    case "$process_name" in
-      codex)
-        discover_codex "$pane_id" "$process_id" && break
-        ;;
-      claude)
-        discover_claude "$pane_id" "$process_id" && break
-        ;;
-    esac
-
-    [ "$process_id" = "$leader_pid" ] && break
-    parent_id=$(proc_stat_value "$process_id" 2)
-    valid_positive_number "$parent_id" || break
-    [ "$parent_id" != "$process_id" ] || break
-    process_id=$parent_id
-    depth=$((depth + 1))
-  done
-done
+  pane_discovered["$pane_id"]=1
+done <<< "$PANE_PROCESSES"
