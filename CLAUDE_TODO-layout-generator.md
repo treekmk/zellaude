@@ -34,6 +34,8 @@ Critics: plan=1 impl=1
 | T18 | impl3 | Re-run the PLAN's Verification on the fixed tree (suite, wasm build, E2E), same protocol and artifacts as T11; report failures to the planner and wait. | T11, T16, T17 | [x] |
 | T19 | impl1 | From the user's CLAUDE note at `README.md:119`: the madev example's pane commands become the real launches — `claude -n impl{i} '/madev-impl impl{i}'` and `claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'` (single quotes; no KDL escapes) — in `README.md`, in the T3 fixture and its expected expansions in `tests/layout_generators.rs`, matching the PLAN's vocabulary block byte for byte; remove the note. | — | [x] |
 | T20 | impl3 | Re-run the PLAN's Verification on the tree after T19 (suite, wasm build, E2E), same protocol and artifacts as T18; report failures and wait. | T18, T19 | [x] |
+| T21 | impl1 | `src/layout_generators.rs` only: a `BodyNode` enum with `from_node_name`; `parse_tab_nodes` and `parse_pane_nodes` match on it exhaustively (no `_` arms); the `BODY_NODES` string array retired. No behaviour change: every refusal message identical, existing tests unchanged. | — | [ ] |
+| T22 | impl3 | Re-run the PLAN's Verification on the tree after T21 (suite, wasm build, E2E), same protocol and artifacts as T20. The wasm figure will exceed the pinned 1,932,476 B by the `BodyNode` enum's cost, as T17's enum cost 88 B: report the measured figure with the enum named as the cause, for the planner to re-pin — that overage is expected, not a failure to wait on. Report any other failure and wait. | T20, T21 | [ ] |
 
 ### Finalize
 | ID | Agent | Task | Depends on | Status |
@@ -41,7 +43,7 @@ Critics: plan=1 impl=1
 | T9 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T1, T2, T3, T4, T5, T6, T7, T8, T13, T14 | [x] |
 | T10 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T9 | [x] |
 | T11 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — preflight first, then run it unattended when it fits; artifacts to `/tmp/layout-generator/`. On failure or preflight no-go, report to the planner and wait for the routed fix — never self-fix, never free up resources; loop until clean. | T10, T15 | [x] |
-| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T20 | (Not possible to mark after deletion) |
+| T12 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seeds, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T22 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -70,10 +72,12 @@ graph TD
   T11 --> T18
   T19[T19 · impl1 · madev launch prompts] --> T20[T20 · impl3 · re-verify]
   T18 --> T20
-  T20 --> T12[T12 · impl3 · archive]
+  T21[T21 · impl1 · BodyNode enum] --> T22[T22 · impl3 · re-verify]
+  T20 --> T22
+  T22 --> T12[T12 · impl3 · archive]
 ```
 
-ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18`; `{T18, T19} → T20 → T12`.
+ASCII fallback: `T1 → T2 → T3 → {T6, T7}`; `T4 → T5`, `T1 → T5`, `T5 → T6 → T8`; `{T6, T8} → T13 → T14`; `{T7, T13, T14} → T9 → T10 → T11`; `T15 → T11`; `{T11, T16, T17} → T18`; `{T18, T19} → T20`; `{T20, T21} → T22 → T12`.
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
