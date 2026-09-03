@@ -2,12 +2,10 @@
 # Discover agent sessions that were already running when Zellaude attached.
 # Arguments:
 #   $1 — Zellij session name
-#   $2 — comma-separated pane_id:leader_pid:client records
-#   $3 — attach scan start time in milliseconds
+#   $2 — attach scan start time in milliseconds
 
 SESSION_NAME=${1:-}
-PANE_RECORDS=${2:-}
-SCAN_STARTED_MS=${3:-}
+SCAN_STARTED_MS=${2:-}
 HOOK_PATH=${ZELLAUDE_ATTACH_HOOK:-"$HOME/.config/zellij/plugins/zellaude-hook.sh"}
 PROC_ROOT=${ZELLAUDE_PROC_ROOT:-/proc}
 
@@ -55,45 +53,59 @@ valid_session_id() {
   esac
 }
 
-record_client_for_pane() {
-  local wanted_pane=$1 remaining record record_tail pane_id client
-  remaining=$PANE_RECORDS
-  while [ -n "$remaining" ]; do
-    case "$remaining" in
-      *,*)
-        record=${remaining%%,*}
-        remaining=${remaining#*,}
-        ;;
-      *)
-        record=$remaining
-        remaining=""
-        ;;
-    esac
-    pane_id=${record%%:*}
-    record_tail=${record#*:}
-    client=${record_tail#*:}
-    if [ "$pane_id" = "$wanted_pane" ]; then
-      printf '%s\n' "$client"
-      return 0
-    fi
-  done
-  return 1
+LOCAL_HOST=$(hostname 2>/dev/null) || LOCAL_HOST=""
+
+# True ONLY on positive evidence that the cached entry's agent is gone: ps
+# exited 1 with no output, or the pid is alive running something else. Every
+# other outcome keeps the entry. Decide on exit status, never on empty output:
+# a ps that cannot run prints nothing too, and it fails for every entry in the
+# same pass, so that reading would blank the whole restore rather than lose one
+# row. A foreign or absent hostname is evidence about nothing local, so validate
+# only when both hostnames are non-empty and equal.
+cached_agent_is_gone() {
+  local agent_pid=$1 client=$2 entry_host=$3 reported_comm status
+  valid_positive_number "$agent_pid" || return 1
+  [ -n "$entry_host" ] && [ -n "$LOCAL_HOST" ] || return 1
+  [ "$entry_host" = "$LOCAL_HOST" ] || return 1
+
+  reported_comm=$(ps -o comm= -p "$agent_pid" 2>/dev/null)
+  status=$?
+  # macOS `ps -o comm=` returns a full path for claude but a bare name for
+  # fish, so basename it — no uname-keyed strip covers both. Never `ucomm`:
+  # it returns the rewritten process title (measured "2.1.191", 2026-09-03).
+  reported_comm=$(printf '%s' "$reported_comm" | tr -d '[:space:]')
+  reported_comm=${reported_comm##*/}
+
+  if [ "$status" -eq 1 ]; then
+    [ -z "$reported_comm" ] && return 0
+    return 1
+  fi
+  [ "$status" -eq 0 ] || return 1
+  [ -n "$reported_comm" ] || return 1
+
+  case "$reported_comm" in
+    "$client"*) return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 emit_cached_states() {
   local now_ms cache_max_age_ms line metadata pane_id client ts_ms
-  local record_client age_ms
+  local agent_pid entry_host age_ms
   now_ms=$(jq -nr 'now * 1000 | floor' 2>/dev/null) || return 0
   valid_positive_number "$now_ms" || return 0
   cache_max_age_ms=43200000
 
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    # agent_pid defaults to 0, not "": tab is IFS whitespace, so an empty field
+    # ahead of `host` would collapse and shift it into agent_pid. 0 is no pid.
     metadata=$(printf '%s\n' "$line" | jq -r '
-      [(.pane_id // ""), (.client // ""), (.ts_ms // "")]
+      [(.pane_id // ""), (.client // ""), (.ts_ms // ""),
+       (.agent_pid // 0), (.host // "")]
       | @tsv
     ' 2>/dev/null) || continue
-    IFS=$'\t' read -r pane_id client ts_ms <<< "$metadata"
+    IFS=$'\t' read -r pane_id client ts_ms agent_pid entry_host <<< "$metadata"
     valid_nonnegative_number "$pane_id" || continue
     valid_positive_number "$ts_ms" || continue
     case "$client" in
@@ -105,9 +117,8 @@ emit_cached_states() {
     [ "$age_ms" -ge -300000 ] || continue
     [ "$age_ms" -le "$cache_max_age_ms" ] || continue
 
-    if [ -n "$PANE_RECORDS" ]; then
-      record_client=$(record_client_for_pane "$pane_id") || continue
-      [ "$record_client" = "$client" ] || continue
+    if cached_agent_is_gone "$agent_pid" "$client" "$entry_host"; then
+      continue
     fi
     printf '%s\n' "$line"
   done <<< "$CACHED_STATES"

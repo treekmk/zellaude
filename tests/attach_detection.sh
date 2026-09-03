@@ -148,8 +148,7 @@ write_environ \
   "CLAUDE_CONFIG_DIR=$CLAUDE_HOME"
 
 # $1 is the /proc fixture root: discovery reads the walk rather than argv now,
-# so an empty root is how a session with no agent processes is modelled. $2, the
-# pane-record argv, lost its drive loop and is kept empty.
+# so an empty root is how a session with no agent processes is modelled.
 run_attach() {
   local proc_root=$1
   HOME="$TEST_HOME" \
@@ -158,7 +157,6 @@ run_attach() {
     ZELLAUDE_ATTACH_HOOK="$PROJECT_DIR/scripts/zellaude-hook.sh" \
     "$PROJECT_DIR/scripts/zellaude-attach.sh" \
       main \
-      "" \
       "$SCAN_STARTED_MS"
 }
 
@@ -384,5 +382,123 @@ printf '%s\n' "$OUTPUT" |
       and .rainbow_name == true
     )
   ' >/dev/null
+
+# --- cached-entry validation -------------------------------------------------
+# Run with the empty proc root so nothing is discovered and the only rows are
+# cached ones, and with a fake ps on PATH. The hook exits on --restore before it
+# reads any process, so the stub answers the validator alone.
+LOCAL_HOSTNAME=$(hostname 2>/dev/null) || LOCAL_HOSTNAME=""
+VALIDATOR_PS_BIN="$TEST_DIR/validator-ps-bin"
+PS_UNAVAILABLE_BIN="$TEST_DIR/ps-unavailable-bin"
+mkdir -p "$VALIDATOR_PS_BIN" "$PS_UNAVAILABLE_BIN"
+
+# Exits are set deliberately — live 0, dead 1 with no output — because the
+# validator decides on exit status, never on empty output. `-o comm=` also
+# reproduces the macOS form measured 2026-09-03, a full path, while `-o ucomm=`
+# answers with the rewritten process title: a ucomm implementation reads
+# "2.1.191" for the live agent and drops the row this asserts it keeps.
+cat > "$VALIDATOR_PS_BIN/ps" <<'FAKE_VALIDATOR_PS'
+#!/usr/bin/env bash
+case " $* " in
+  *" -o ucomm= "*) printf '2.1.191\n'; exit 0 ;;
+esac
+case "${!#}" in
+  4101) printf '/Users/x/.local/bin/claude\n'; exit 0 ;;
+  4102) printf 'bash\n'; exit 0 ;;
+  *) exit 1 ;;
+esac
+FAKE_VALIDATOR_PS
+chmod +x "$VALIDATOR_PS_BIN/ps"
+
+cat > "$PS_UNAVAILABLE_BIN/ps" <<'FAKE_UNAVAILABLE_PS'
+#!/usr/bin/env bash
+exit 127
+FAKE_UNAVAILABLE_PS
+chmod +x "$PS_UNAVAILABLE_BIN/ps"
+
+HOSTLESS_BIN="$TEST_DIR/hostless-bin"
+mkdir -p "$HOSTLESS_BIN"
+cat > "$HOSTLESS_BIN/hostname" <<'FAKE_HOSTNAME'
+#!/usr/bin/env bash
+exit 1
+FAKE_HOSTNAME
+chmod +x "$HOSTLESS_BIN/hostname"
+
+write_cache_entry() {
+  local pane_id=$1 session_id=$2 agent_pid=$3 host=$4
+  jq -nc \
+    --argjson pane_id "$pane_id" \
+    --arg session_id "$session_id" \
+    --argjson agent_pid "$agent_pid" \
+    --arg host "$host" \
+    --argjson ts_ms "$(jq -nr 'now * 1000 | floor')" \
+    '{
+      pane_id: $pane_id,
+      session_id: $session_id,
+      hook_event: "Notification",
+      zellij_session: "main",
+      client: "claude",
+      ts_ms: $ts_ms,
+      is_subagent: false,
+      rainbow_name: true,
+      agent_pid: (if $agent_pid == 0 then null else $agent_pid end),
+      host: (if $host == "" then null else $host end)
+    }' > "$CACHE_DIR/main.$pane_id.json"
+}
+
+run_attach_validating() {
+  local path_prefix=$1
+  HOME="$TEST_HOME" \
+    XDG_RUNTIME_DIR="$RUNTIME_DIR" \
+    ZELLAUDE_PROC_ROOT="$EMPTY_PROC_ROOT" \
+    ZELLAUDE_ATTACH_HOOK="$PROJECT_DIR/scripts/zellaude-hook.sh" \
+    PATH="$path_prefix:$PATH" \
+    "$PROJECT_DIR/scripts/zellaude-attach.sh" \
+      main \
+      "$SCAN_STARTED_MS"
+}
+
+write_cache_entry 80 live-agent            4101 "$LOCAL_HOSTNAME"
+write_cache_entry 81 dead-agent            4199 "$LOCAL_HOSTNAME"
+write_cache_entry 82 reused-pid            4102 "$LOCAL_HOSTNAME"
+write_cache_entry 83 null-agent-pid           0 "$LOCAL_HOSTNAME"
+write_cache_entry 84 foreign-host         4199 "elsewhere.invalid"
+write_cache_entry 85 null-host            4199 ""
+
+# Dropped only on positive evidence: 81 is gone (exit 1, no output) and 82 is a
+# recycled pid running something else. The other four are kept — a live agent
+# whose comm still matches, a null agent_pid, and two entries this host has no
+# standing to judge.
+OUTPUT=$(run_attach_validating "$VALIDATOR_PS_BIN")
+printf '%s\n' "$OUTPUT" |
+  jq -s -e '
+    ([.[] | .session_id] | sort)
+    == ["foreign-host", "live-agent", "null-agent-pid", "null-host"]
+  ' >/dev/null
+
+# A ps that cannot run is evidence about nothing: it fails for every entry in
+# the same pass, so treating its empty output as death would blank the restore
+# rather than lose one row. All six survive, including the two just dropped.
+OUTPUT=$(run_attach_validating "$PS_UNAVAILABLE_BIN")
+printf '%s\n' "$OUTPUT" |
+  jq -s -e '
+    ([.[] | .session_id] | sort)
+    == ["dead-agent", "foreign-host", "live-agent", "null-agent-pid",
+        "null-host", "reused-pid"]
+  ' >/dev/null
+
+# A local hostname that cannot be read must not make a hostless entry local:
+# empty equals empty would validate a pid against a process table it never came
+# from. Both sides have to be non-empty before the comparison means anything, so
+# every entry survives here — including the two the same ps calls dead.
+OUTPUT=$(run_attach_validating "$HOSTLESS_BIN:$VALIDATOR_PS_BIN")
+printf '%s\n' "$OUTPUT" |
+  jq -s -e '
+    ([.[] | .session_id] | sort)
+    == ["dead-agent", "foreign-host", "live-agent", "null-agent-pid",
+        "null-host", "reused-pid"]
+  ' >/dev/null
+
+rm -f "$CACHE_DIR"/main.8*.json
 
 printf 'attach detection tests passed\n'
