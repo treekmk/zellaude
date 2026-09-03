@@ -370,7 +370,6 @@ impl ZellijPlugin for State {
                         true
                     }
                     Some("reload_custom_states") => {
-                        self.custom_state_reload_in_flight = false;
                         match (exit_code, serde_json::from_slice(&stdout)) {
                             (Some(0), Ok(sources)) => self.apply_custom_state_sources(&sources),
                             (Some(0), Err(error)) => {
@@ -725,7 +724,6 @@ impl State {
     fn reload_custom_states(&mut self) {
         let mut ctx = BTreeMap::new();
         ctx.insert("type".into(), "reload_custom_states".into());
-        self.custom_state_reload_in_flight = true;
         run_command(
             &[
                 "sh",
@@ -820,7 +818,7 @@ impl State {
             .as_mut()
             .and_then(|prompt| prompt.pending_submit.take());
         if let Some(input) = pending {
-            self.open_custom_layout(&input);
+            self.launch_custom_state(&input);
         }
     }
 
@@ -867,6 +865,11 @@ impl State {
         }
     }
 
+    /// Every Enter re-reads the files first: a refusal leaves the prompt open
+    /// with the input intact, so the next Enter has to see an edit made in
+    /// between. The launch happens in `resolve_pending_submit` when the read
+    /// lands, and `launch_custom_state` never reloads, so the cycle is one
+    /// deep.
     fn open_custom_layout(&mut self, id: &str) -> bool {
         if id.is_empty() {
             if let Some(prompt) = self.custom_layout_prompt.as_mut() {
@@ -874,15 +877,17 @@ impl State {
             }
             return true;
         }
-        // Opening the prompt started a reload. Resolving against a view of
-        // the files that is about to be replaced would be arbitrary, so hold
-        // the input until the result lands.
-        if self.custom_state_reload_in_flight {
-            if let Some(prompt) = self.custom_layout_prompt.as_mut() {
-                prompt.pending_submit = Some(id.to_string());
-            }
-            return true;
+        if let Some(prompt) = self.custom_layout_prompt.as_mut() {
+            prompt.pending_submit = Some(id.to_string());
         }
+        self.reload_custom_states();
+        true
+    }
+
+    /// Resolve and open, against the files as the reload just read them. Only
+    /// `resolve_pending_submit` calls this, and it never reloads itself --
+    /// that is what keeps the submit cycle one deep.
+    fn launch_custom_state(&mut self, input: &str) -> bool {
         let plugin_id = *self
             .plugin_id
             .get_or_insert_with(|| get_plugin_ids().plugin_id);
@@ -912,7 +917,7 @@ impl State {
             }
             return true;
         };
-        let tabs = match self.resolve_custom_state(id, &source) {
+        let tabs = match self.resolve_custom_state(input, &source) {
             Ok(tabs) => tabs,
             Err(error) => {
                 if let Some(prompt) = self.custom_layout_prompt.as_mut() {
@@ -2398,6 +2403,52 @@ mod tests {
         state.custom_layouts_from_plugin_configuration = true;
         state.apply_custom_state_sources(&generator_sources("{}", generator));
         assert!(state.custom_layouts.contains_key("a"));
+    }
+
+    #[test]
+    fn a_refused_input_resolves_on_the_next_enter_once_the_file_is_fixed() {
+        // The same floors the E2E stages, so both tell one story: a 200x49 tab
+        // fits one column of three panes at 14 rows each.
+        let floors = r#"{"min_pane_width": 100, "min_pane_height": 5}"#;
+        let generator = |extra: &str| {
+            format!(
+                "command \"hot\"\narg \"n\"\n{extra}\ntab \"{{tab}}-hot\" {{\n    \
+                 each for=\"i\" in=\"1..=n\" {{\n        pane \"printf hot-p{{i}}\"\n    }}\n}}\n"
+            )
+        };
+        let source = layout_generators::SourceTab {
+            name: "e2e".to_string(),
+            geometry: layout_generators::TabGeometry {
+                columns: 200,
+                rows: 49,
+            },
+        };
+        let mut state = State::default();
+
+        state.apply_custom_state_sources(&generator_sources(
+            floors,
+            &generator("min_pane_height 40\n"),
+        ));
+        let refusal = state.resolve_custom_state("hot 3", &source).unwrap_err();
+        assert!(
+            refusal.contains("does not fit") && refusal.contains("g.kdl"),
+            "want a prefixed floor refusal, got {refusal:?}"
+        );
+
+        // The user edits the file with the prompt still open; the next Enter
+        // reloads first, so the same input now resolves.
+        state.apply_custom_state_sources(&generator_sources(floors, &generator("")));
+        let tabs = state.resolve_custom_state("hot 3", &source).unwrap();
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].id, "e2e-hot");
+        assert_eq!(
+            tabs[0].commands,
+            custom_layouts::CommandGrid::Rows(vec![
+                vec!["printf hot-p1".to_string()],
+                vec!["printf hot-p2".to_string()],
+                vec!["printf hot-p3".to_string()],
+            ])
+        );
     }
 
     #[test]

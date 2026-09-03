@@ -240,7 +240,6 @@ pub struct State {
     pub layout_generator_config_error: Option<String>,
     /// Floors from zellaude.json, under every generator file's own floors.
     pub pane_floor_overrides: layout_generators::FloorOverrides,
-    pub custom_state_reload_in_flight: bool,
     /// `None` until the settings file has been read; `Some` afterwards, even
     /// when the key is absent, so the built-in still compiles.
     pub session_templates: Option<Vec<session_templates::SessionTemplate>>,
