@@ -193,8 +193,9 @@ referenced flags may wrap — they are read, not executed.
     targeting it needs the same `TMPDIR`. **Pass: the base run emits at least
     one such line and the fixed run emits zero.** The two halves are different
     kinds of claim, and the difference is the point. `fixed == 0` is
-    **structural**: there are exactly three call sites (`src/attach.rs:63`,
-    `src/attach.rs:70`, `src/main.rs:512`) and this change deletes all three, so
+    **structural**: there were exactly three call sites — `src/attach.rs:63` and
+    `:70` plus `src/main.rs:512`, as they stood before T4 — and this change
+    deletes all three, so
     with no call site there is no call, whatever the load; a nonzero result
     means an incomplete deletion or a new caller. `base >= 1` is **statistical**
     — the positive control showing the instrument fires on this box in this
@@ -244,7 +245,7 @@ referenced flags may wrap — they are read, not executed.
     with real agent panes: `bash scripts/zellaude-attach.sh <session> <now_ms>`
     — run directly, the script file is `$0`, so `<session>` is `$1`; the
     `zellaude-attach` token exists only in the plugin's `bash -c` form
-    (`src/attach.rs:97-108`).
+    (`attach::run`'s `run_command` call, `src/attach.rs:41-51` after T4).
     Pass: exits 0, emits at least one NDJSON line, and **every line whose
     `hook_event` is `SessionRestore`** — the discovery rows — carries a non-empty
     `session_id` and a `pane_id` present in that session's manifest terminal pane
