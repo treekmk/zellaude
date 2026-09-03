@@ -196,7 +196,10 @@ impl CustomLayout {
         Ok(())
     }
 
-    /// Open this state as the only tab of a layout document.
+    /// The single-tab form of `tabs_to_kdl`, which the tests exercise; the
+    /// plugin itself always emits through `tabs_to_kdl`.
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn to_kdl(
         &self,
         plugin_location: &str,

@@ -19,7 +19,7 @@ Critics: plan=1 impl=1
 | ID | Agent | Task | Depends on | Status |
 |----|-------|------|------------|--------|
 | T5 | impl2 | `src/main.rs` + `src/state.rs`: `mod layout_generators`; the new `State` fields; `RELOAD_CUSTOM_STATES_SCRIPT` (sh + jq envelope, `LC_ALL=C` order, `*.kdl` only, missing `zellaude.json` → `{}`); `reload_custom_states` issued from `start_custom_layout_prompt`; the `reload_custom_states` result arm feeding `apply_custom_state_sources` (custom_states with plugin-block precedence, floor overrides, generators, both error slots, empty-input hint refresh, `pending_submit` resolution); a non-zero exit clears the in-flight flag and reports; `open_custom_layout` defers while a reload is in flight. Inline tests run the script through real `sh` against a temp `HOME`. | T1, T4 | [x] |
-| T6 | impl2 | Submit path in `src/main.rs`: find the source tab by position (`manifest.panes.iter()`), `prompt_source_tab` from `TabInfo.name` and `display_area_*` minus `bar_rows`, `resolve_custom_state` (exact id first, then `layout_generators::invoke`), emission through `tabs_to_kdl`, every error to `prompt.error` with the file prefix. | T3, T5 | [ ] |
+| T6 | impl2 | Submit path in `src/main.rs`: find the source tab by position (`manifest.panes.iter()`), `prompt_source_tab` from `TabInfo.name` and `display_area_*` minus `bar_rows`, `resolve_custom_state` (exact id first, then `layout_generators::invoke`), emission through `tabs_to_kdl`, every error to `prompt.error` with the file prefix. | T3, T5 | [x] |
 
 ### Phase 4 — Docs and E2E harness
 | ID | Agent | Task | Depends on | Status |

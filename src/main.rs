@@ -773,6 +773,46 @@ impl State {
         }
     }
 
+    /// The tab the prompt was opened from: its name binds `{tab}`, and its
+    /// display area minus the bars a generated tab carries is what the grid
+    /// may use.
+    fn prompt_source_tab(
+        &self,
+        tab_position: usize,
+        chrome: &custom_layouts::TabChrome,
+        plugin_location: &str,
+    ) -> Option<layout_generators::SourceTab> {
+        let tab = self.tabs.iter().find(|tab| tab.position == tab_position)?;
+        Some(layout_generators::SourceTab {
+            name: tab.name.clone(),
+            geometry: layout_generators::TabGeometry {
+                columns: tab.display_area_columns,
+                rows: tab
+                    .display_area_rows
+                    .saturating_sub(chrome.bar_rows(plugin_location)),
+            },
+        })
+    }
+
+    /// An exact `custom_states` id first, so a literal id such as `2fa` keeps
+    /// working, then the generators. Generator refusals already name the file
+    /// they came from, so they reach the prompt untouched.
+    fn resolve_custom_state(
+        &self,
+        input: &str,
+        source: &layout_generators::SourceTab,
+    ) -> Result<Vec<custom_layouts::CustomLayout>, String> {
+        if let Some(layout) = self.custom_layouts.get(input) {
+            return Ok(vec![layout.clone()]);
+        }
+        layout_generators::invoke(
+            &self.layout_generators,
+            input,
+            source,
+            self.pane_floor_overrides,
+        )
+    }
+
     /// Open the state the user submitted while this reload was still in flight.
     fn resolve_pending_submit(&mut self) {
         let pending = self
@@ -843,45 +883,55 @@ impl State {
             }
             return true;
         }
-        let Some(layout) = self.custom_layouts.get(id).cloned() else {
-            if let Some(prompt) = self.custom_layout_prompt.as_mut() {
-                prompt.error = Some(format!("Unknown custom state {id:?}"));
-            }
-            return true;
-        };
         let plugin_id = *self
             .plugin_id
             .get_or_insert_with(|| get_plugin_ids().plugin_id);
-        let tab_panes = self.pane_manifest.as_ref().and_then(|manifest| {
-            manifest.panes.values().find(|panes| {
-                panes
+        // `.iter()`, not `.values()`: the position key is what TabInfo is
+        // looked up by, and the grid is sized from that tab. The same walk
+        // reads the bars, which the new tab has to repeat itself -- Zellij
+        // parses the generated KDL alone, so the session's tab template, and
+        // with it the status bar under the grid, never reaches it.
+        let instance_tab = self.pane_manifest.as_ref().and_then(|manifest| {
+            manifest.panes.iter().find_map(|(position, panes)| {
+                let plugin = panes
                     .iter()
-                    .any(|pane| pane.is_plugin && pane.id == plugin_id)
+                    .find(|pane| pane.is_plugin && pane.id == plugin_id)?;
+                let location = plugin.plugin_url.clone()?;
+                Some((*position, location, custom_layouts::tab_chrome(panes)))
             })
         });
-        let plugin_location = tab_panes.and_then(|panes| {
-            panes
-                .iter()
-                .find(|pane| pane.is_plugin && pane.id == plugin_id)
-                .and_then(|pane| pane.plugin_url.clone())
-        });
-        let Some(plugin_location) = plugin_location else {
+        let Some((tab_position, plugin_location, chrome)) = instance_tab else {
             if let Some(prompt) = self.custom_layout_prompt.as_mut() {
                 prompt.error = Some("Zellaude plugin location is unavailable".to_string());
             }
             return true;
         };
-        // The new tab has to carry this tab's bars itself: Zellij parses the
-        // generated KDL on its own, so the session's tab template -- and with
-        // it the status bar under the grid -- never reaches the new tab.
-        let chrome = tab_panes
-            .map(|panes| custom_layouts::tab_chrome(panes))
-            .unwrap_or_default();
+        let Some(source) = self.prompt_source_tab(tab_position, &chrome, &plugin_location) else {
+            if let Some(prompt) = self.custom_layout_prompt.as_mut() {
+                prompt.error = Some("Zellaude cannot read this tab's size".to_string());
+            }
+            return true;
+        };
+        let tabs = match self.resolve_custom_state(id, &source) {
+            Ok(tabs) => tabs,
+            Err(error) => {
+                if let Some(prompt) = self.custom_layout_prompt.as_mut() {
+                    prompt.error = Some(error);
+                }
+                return true;
+            }
+        };
         let cwd = self
             .custom_layout_prompt
             .as_ref()
             .and_then(|prompt| prompt.cwd.as_deref());
-        let kdl = match layout.to_kdl(&plugin_location, &self.plugin_configuration, cwd, &chrome) {
+        let kdl = match custom_layouts::tabs_to_kdl(
+            &tabs,
+            &plugin_location,
+            &self.plugin_configuration,
+            cwd,
+            &chrome,
+        ) {
             Ok(kdl) => kdl,
             Err(error) => {
                 if let Some(prompt) = self.custom_layout_prompt.as_mut() {
@@ -2275,7 +2325,9 @@ mod tests {
         ));
         let generators = home.join(".config/zellij/plugins/zellaude/generators");
         std::fs::create_dir_all(&generators).unwrap();
-        std::fs::write(generators.join("b.kdl"), "command \"b\"\n").unwrap();
+        // "B" before "a" is byte order; a collating locale inverts it, so this
+        // pair proves LC_ALL=C rather than mere determinism.
+        std::fs::write(generators.join("B.kdl"), "command \"B\"\n").unwrap();
         std::fs::write(generators.join("a.kdl"), "command \"a\"\n").unwrap();
         std::fs::write(generators.join("notes.txt"), "not a generator").unwrap();
         std::fs::create_dir(generators.join("nested.kdl")).unwrap();
@@ -2296,7 +2348,7 @@ mod tests {
                 .iter()
                 .map(|file| file.content.as_str())
                 .collect::<Vec<_>>(),
-            vec!["command \"a\"\n", "command \"b\"\n"]
+            vec!["command \"B\"\n", "command \"a\"\n"]
         );
 
         let config_path = home.join(".config/zellij/plugins/zellaude.json");
