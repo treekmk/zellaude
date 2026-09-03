@@ -3,9 +3,9 @@
 Date: 2026-07-31
 Status: superseded
 
-Neither deliverable survives: the introspection poll went in commit 2220586,
-and `client_for_command` went with the blocking attach-scan host calls. The
-attach script dispatches on `comm`, which a pre-exec `better-codex` never
+Neither deliverable survives: the introspection poll was removed in commit
+2220586, and `client_for_command` with the blocking attach-scan host calls.
+The attach script dispatches on `comm`, which a pre-exec `better-codex` never
 matched anyway.
 
 ## Background
