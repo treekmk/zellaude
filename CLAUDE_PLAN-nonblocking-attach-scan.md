@@ -244,12 +244,73 @@ referenced flags may wrap — they are read, not executed.
     with real agent panes: `bash scripts/zellaude-attach.sh <session> <now_ms>`
     — run directly, the script file is `$0`, so `<session>` is `$1`; the
     `zellaude-attach` token exists only in the plugin's `bash -c` form
-    (`src/attach.rs:97-108`). Pass: exits 0 in **under 1 s**, emits at least one
-    NDJSON line, every line with `hook_event == "SessionRestore"`, a non-empty
-    `session_id`, and a `pane_id` in that session's manifest terminal pane ids
-    (`~/.cache/zellaude/runtime/<session>.manifest.json`). Read-only — the hook
-    calls use `--inspect` and `--restore`, neither writes.
-  - **Preflight:** no scarce resource — no GPU, no quota, 20 shells against
+    (`src/attach.rs:97-108`).
+    Pass: exits 0, emits at least one NDJSON line, and **every line whose
+    `hook_event` is `SessionRestore`** — the discovery rows — carries a non-empty
+    `session_id` and a `pane_id` present in that session's manifest terminal pane
+    ids (`~/.cache/zellaude/runtime/<session>.manifest.json`). At least one such
+    row must be present.
+    **Do not assert that on every line.** `emit_cached_states` prints cached rows
+    verbatim ahead of discovery, carrying whatever `hook_event` they were cached
+    with — measured, 9 rows of `Notification` in one run. Rewriting `hook_event`
+    to `SessionRestore` is the *plugin's* step (`src/main.rs:470`), not the
+    script's, so asserting it against script stdout tests the wrong side of the
+    boundary.
+    **Cached rows carry a positive assertion of their own:** every emitted row
+    with a non-null `agent_pid` and a local `host` must name a live process —
+    one `ps` per row. This is **racy and must not hard-fail on a single miss**:
+    the cache is read at `:19` and the check runs after the script exits, so an
+    agent exiting in that window makes a correctly-kept row name a dead pid.
+    Follow the pattern used for the non-discriminating base arm and the
+    agent-less session — one miss is **inconclusive, never pass, never
+    hard-fail**; the *same* row missing on a re-run, or every row missing at
+    once, is real and fails. That is the validator's keep path exercised against real
+    pids and a real cache, which nothing else covers: the `ps` stubs test the
+    rule in isolation against a fake `ps`. The drop path is not asserted here;
+    proving it live means planting a stale entry, which is a fixture problem.
+    **Bound the walk, not the total.** A total bound would measure the hook
+    subprocess cost this feature does not touch: measured 2026-09-03 against a
+    live 9-agent session with 765 processes, 5.77 s total, of which the walk is
+    39 ms — consistent with the 22 ms for 528 pinned above — the rest being one
+    hook `--inspect` per discovered pane (~335 ms each, `:271`, `:434`) plus one
+    `--restore` (~136 ms, `:19`), all of which scales with live agents and
+    predates this change. So bound the walk in a *second* invocation with
+    `ZELLAUDE_ATTACH_HOOK` pointed at a no-op stub, which removes the subprocess
+    cost and leaves the `/proc` pass.
+    **Bound it per process, not as a flat second:** the run must average **under
+    1 ms per process seen**, and both the elapsed time and the process count go
+    in the artifacts so the figure can be re-derived. A flat 1 s stops
+    discriminating below ~26 processes — the batched pass costs 0.051 ms/process
+    (39 ms / 765) against the forbidden read loop's 38.45 ms/process
+    (20.3 s / 528), so a read loop crosses one second at 26 — and the bound's
+    validity would then be a property of the box, not the code. Per-process,
+    the measured 0.051 ms keeps ~20x margin and a read loop fails by ~38x at any
+    size. Without this bound nothing anywhere asserts the batched-pass rule:
+    `tests/attach_detection.sh` runs against a fake `PROC_ROOT` of a handful of
+    processes, where a read loop is invisible, and recording elapsed time in
+    artifacts makes a regression visible but catches nothing.
+    **The stub must be executable, and the run must prove it walked.**
+    `[ -x "$HOOK_PATH" ] || exit 0` is line 15, so a stub without `chmod +x`
+    makes the script exit 0 immediately: the bound passes trivially, no rows are
+    emitted, and the correctness assertions live on the *real-hook* invocation
+    so they still pass — a green leg that measured nothing. Have the stub append
+    its invocations to a file and require at least one **`--inspect`**, which
+    proves the walk ran and found a pane's agent. A `--restore` marker will not
+    do: `:19` runs before the `uname` gate, so it fires even when the walk never
+    does. Leg B's preflight guarantees a live agent pane, so requiring one
+    `--inspect` is safe.
+    Note the stubbed run does *more* per-candidate work than the real one — every
+    `discover_*` fails, so the loop never breaks early and every candidate gets
+    its own environ, cwd and fd reads. That is conservative in the right
+    direction: it measures more than the walk, so it cannot hide a slow one. Do
+    not "correct" the bound after noticing the extra work.
+    Read-only — the hook calls use `--inspect` and `--restore`, neither writes.
+  - **Preflight, Leg B:** the target session must hold at least one live agent
+    pane. If it holds none, the leg cannot prove discovery works and must report
+    a **no-go, not a failure** — the same shape as Leg A's non-discriminating
+    base arm. An environmental absence of agents reaching the planner as a defect
+    wastes a routing cycle and invites someone to "fix" working code.
+  - **Preflight, Leg A:** no scarce resource — no GPU, no quota, 20 shells against
     ~1.99 TB free RAM. Two real go conditions: `zellij` on PATH, throwaway
     session name unused (`zellij list-sessions`). Not met → report, do not make
     room.
