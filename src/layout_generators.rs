@@ -24,7 +24,25 @@ pub const MAX_GENERATED_TABS: usize = 64;
 /// Bound to the name of the tab the prompt was opened from.
 const SOURCE_TAB_VARIABLE: &str = "tab";
 
-const BODY_NODES: [&str; 3] = ["tab", "pane", "each"];
+/// The body nodes. Naming them as a type is what makes both walkers
+/// exhaustive: a fourth one cannot be added without the compiler demanding that
+/// each of them say where it belongs.
+enum BodyNode {
+    Tab,
+    Pane,
+    Each,
+}
+
+impl BodyNode {
+    fn from_node_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "tab" => Self::Tab,
+            "pane" => Self::Pane,
+            "each" => Self::Each,
+            _ => return None,
+        })
+    }
+}
 
 /// The declaration nodes. Naming them as a type is what makes `declare`
 /// exhaustive: a sixth one cannot be added without the compiler demanding it be
@@ -717,7 +735,7 @@ fn parse_generator(content: &str, source: &str) -> Result<LayoutGenerator, Strin
     let mut body_nodes: Vec<&KdlNode> = Vec::new();
     for node in document.nodes() {
         let name = node.name().value();
-        if BODY_NODES.contains(&name) {
+        if BodyNode::from_node_name(name).is_some() {
             body_nodes.push(node);
         } else if let Some(declaration) = Declaration::from_node_name(name) {
             if !body_nodes.is_empty() {
@@ -854,21 +872,21 @@ fn set_floor(slot: &mut Option<usize>, node: &KdlNode) -> Result<(), String> {
 
 /// Refuse an unknown node before anything else, so a misspelling is the message
 /// the user sees rather than whatever property check it happens to trip.
-fn begin_body_node<'a>(node: &'a KdlNode, scope: &Scope) -> Result<(&'a str, Condition), String> {
+fn begin_body_node(node: &KdlNode, scope: &Scope) -> Result<(BodyNode, Condition), String> {
     let name = node.name().value();
-    if !BODY_NODES.contains(&name) {
+    let Some(kind) = BodyNode::from_node_name(name) else {
         return Err(format!("unknown node {name:?}"));
-    }
+    };
     reject_unknown_properties(node)?;
-    Ok((name, parse_condition(node, scope)?))
+    Ok((kind, parse_condition(node, scope)?))
 }
 
 fn parse_tab_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<TabNode>, String> {
     let mut body = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let (name, condition) = begin_body_node(node, scope)?;
-        body.push(match name {
-            "tab" => TabNode::Tab {
+        let (kind, condition) = begin_body_node(node, scope)?;
+        body.push(match kind {
+            BodyNode::Tab => TabNode::Tab {
                 name: match node_arguments(node).as_slice() {
                     [] => None,
                     [value] => Some(parse_template(expect_string(value, "a tab name")?, scope)?),
@@ -877,7 +895,7 @@ fn parse_tab_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<TabNode>
                 condition,
                 body: parse_pane_nodes(&child_nodes(node), scope)?,
             },
-            "each" => {
+            BodyNode::Each => {
                 let (variable, range, body) = parse_each_node(node, scope, parse_tab_nodes)?;
                 TabNode::Each {
                     variable,
@@ -886,7 +904,7 @@ fn parse_tab_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<TabNode>
                     body,
                 }
             }
-            _ => return Err("a pane node must be inside a tab".to_string()),
+            BodyNode::Pane => return Err("a pane node must be inside a tab".to_string()),
         });
     }
     Ok(body)
@@ -895,9 +913,9 @@ fn parse_tab_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<TabNode>
 fn parse_pane_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<PaneNode>, String> {
     let mut body = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let (name, condition) = begin_body_node(node, scope)?;
-        body.push(match name {
-            "pane" => {
+        let (kind, condition) = begin_body_node(node, scope)?;
+        body.push(match kind {
+            BodyNode::Pane => {
                 reject_children(node)?;
                 let [value] = node_arguments(node)[..] else {
                     return Err("a pane node takes exactly one command argument".to_string());
@@ -907,7 +925,7 @@ fn parse_pane_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<PaneNod
                     condition,
                 }
             }
-            "each" => {
+            BodyNode::Each => {
                 let (variable, range, body) = parse_each_node(node, scope, parse_pane_nodes)?;
                 PaneNode::Each {
                     variable,
@@ -916,7 +934,9 @@ fn parse_pane_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<PaneNod
                     body,
                 }
             }
-            _ => return Err("a tab node must not be nested inside another tab".to_string()),
+            BodyNode::Tab => {
+                return Err("a tab node must not be nested inside another tab".to_string())
+            }
         });
     }
     Ok(body)
