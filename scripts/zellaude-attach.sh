@@ -13,7 +13,7 @@ PROC_ROOT=${ZELLAUDE_PROC_ROOT:-/proc}
 [ -x "$HOOK_PATH" ] || exit 0
 
 # Cached hook state preserves launch-only mode choices that cannot always be
-# reconstructed from a transcript. It is validated and emitted below.
+# reconstructed from a transcript.
 CACHED_STATES=$("$HOOK_PATH" --restore "$SESSION_NAME" 2>/dev/null || true)
 
 proc_env_value() {
@@ -143,7 +143,7 @@ emit_live_payload() {
 emit_cached_states
 
 # Exact process discovery currently relies on Linux procfs. Other platforms
-# use the bounded, command-matched hook cache above.
+# use the bounded, liveness-validated hook cache above.
 [ "$(uname)" = "Linux" ] || exit 0
 [ -d "$PROC_ROOT" ] || exit 0
 

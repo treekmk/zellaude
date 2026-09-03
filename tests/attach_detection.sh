@@ -160,8 +160,8 @@ run_attach() {
       "$SCAN_STARTED_MS"
 }
 
-# The cache is the portable attach path and must be restored even when pane
-# introspection produces no agent process records.
+# The cache is the portable attach path and must be restored even when the
+# /proc walk finds no agent processes.
 CACHE_DIR="$RUNTIME_DIR/zellaude-$(id -u)"
 CACHE_FILE="$CACHE_DIR/main.77.json"
 mkdir -p "$CACHE_DIR"
@@ -383,7 +383,6 @@ printf '%s\n' "$OUTPUT" |
     )
   ' >/dev/null
 
-# --- cached-entry validation -------------------------------------------------
 # Run with the empty proc root so nothing is discovered and the only rows are
 # cached ones, and with a fake ps on PATH. The hook exits on --restore before it
 # reads any process, so the stub answers the validator alone.
