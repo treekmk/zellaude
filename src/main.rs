@@ -2,6 +2,7 @@ mod attach;
 mod custom_layouts;
 mod event_handler;
 mod installer;
+mod layout_generators;
 mod manifest;
 mod placeholder;
 mod rainbow;
@@ -72,6 +73,26 @@ fi
 
 mv "$tmp_path" "$config_path"
 trap - 0 HUP INT TERM
+"#;
+/// Print the `CustomStateSources` envelope: the raw zellaude.json text and
+/// every generator file, so the plugin's own parsers keep receiving the raw
+/// documents. `LC_ALL=C` makes the file order byte order rather than the
+/// caller's locale.
+const RELOAD_CUSTOM_STATES_SCRIPT: &str = r#"
+set -eu
+LC_ALL=C
+export LC_ALL
+config_path="$HOME/.config/zellij/plugins/zellaude.json"
+generators_dir="$HOME/.config/zellij/plugins/zellaude/generators"
+settings_json=$(cat "$config_path" 2>/dev/null || printf '%s' '{}')
+generator_files='[]'
+for path in "$generators_dir"/*.kdl; do
+    [ -f "$path" ] || continue
+    generator_files=$(jq -n --argjson files "$generator_files" --arg path "$path" \
+        --rawfile content "$path" '$files + [{path: $path, content: $content}]')
+done
+jq -n --arg settings "$settings_json" --argjson files "$generator_files" \
+    '{settings_json: $settings, generator_files: $files}'
 "#;
 
 fn split_three_focus_matches(tab_id: usize, pane_id: u32) -> bool {
@@ -346,6 +367,23 @@ impl ZellijPlugin for State {
                         self.config_loaded = true;
                         self.on_command_permissions_granted();
                         self.maybe_compile_session_templates();
+                        true
+                    }
+                    Some("reload_custom_states") => {
+                        self.custom_state_reload_in_flight = false;
+                        match (exit_code, serde_json::from_slice(&stdout)) {
+                            (Some(0), Ok(sources)) => self.apply_custom_state_sources(&sources),
+                            (Some(0), Err(error)) => {
+                                eprintln!("Zellaude could not read custom states: {error}")
+                            }
+                            _ => eprintln!(
+                                "Zellaude could not read custom states: {}",
+                                String::from_utf8_lossy(&stderr).trim()
+                            ),
+                        }
+                        // Runs on the failure path too: a submit held for this
+                        // reload must not be swallowed by a read that failed.
+                        self.resolve_pending_submit();
                         true
                     }
                     Some("install_hooks") if exit_code == Some(0) => {
@@ -650,11 +688,7 @@ impl State {
             .ok()
             .map(|path| path.to_string_lossy().into_owned());
         let mut prompt = custom_layouts::Prompt::new(return_pane_id, cwd);
-        if let Some(error) = self.custom_layout_config_error.as_deref() {
-            prompt.error = Some(format!("Configuration error: {error}"));
-        } else if self.custom_layouts.is_empty() {
-            prompt.error = Some("No custom states configured".to_string());
-        }
+        prompt.error = self.custom_layout_prompt_hint();
 
         self.view_mode = ViewMode::Normal;
         self.custom_layout_prompt = Some(prompt);
@@ -670,6 +704,83 @@ impl State {
         // while still cleaning up a focus request the host never honors.
         if let Some(prompt) = self.custom_layout_prompt.as_mut() {
             prompt.begin_focus_acquisition(unix_now_ms());
+        }
+        self.reload_custom_states();
+    }
+
+    /// What the prompt shows before anything is typed: a configuration error
+    /// from either source, else a nudge when nothing is configured at all.
+    fn custom_layout_prompt_hint(&self) -> Option<String> {
+        if let Some(error) = self
+            .custom_layout_config_error
+            .as_deref()
+            .or(self.layout_generator_config_error.as_deref())
+        {
+            return Some(format!("Configuration error: {error}"));
+        }
+        (self.custom_layouts.is_empty() && self.layout_generators.is_empty())
+            .then(|| "No custom states configured".to_string())
+    }
+
+    fn reload_custom_states(&mut self) {
+        let mut ctx = BTreeMap::new();
+        ctx.insert("type".into(), "reload_custom_states".into());
+        self.custom_state_reload_in_flight = true;
+        run_command(
+            &[
+                "sh",
+                "-c",
+                RELOAD_CUSTOM_STATES_SCRIPT,
+                "zellaude-reload-custom-states",
+            ],
+            ctx,
+        );
+    }
+
+    /// Apply a reload: whatever parsed replaces what is held; a source that
+    /// failed to parse keeps its last good copy and fills its error slot, so a
+    /// typo mid-edit cannot strand a state the user is about to open. States
+    /// declared in the plugin block outrank the file and ignore it entirely.
+    fn apply_custom_state_sources(&mut self, sources: &layout_generators::CustomStateSources) {
+        let settings_json = sources.settings_json.trim();
+        if !self.custom_layouts_from_plugin_configuration {
+            match custom_layouts::parse_config_document(settings_json) {
+                Ok(configured) => {
+                    self.custom_layouts = configured.map(custom_layouts::index).unwrap_or_default();
+                    self.custom_layout_config_error = None;
+                }
+                Err(error) => self.custom_layout_config_error = Some(error),
+            }
+        }
+
+        self.layout_generator_config_error = None;
+        match layout_generators::parse_generator_files(&sources.generator_files) {
+            Ok(generators) => self.layout_generators = generators,
+            Err(error) => self.layout_generator_config_error = Some(error),
+        }
+        match layout_generators::parse_floor_overrides(settings_json) {
+            Ok(overrides) => self.pane_floor_overrides = overrides,
+            Err(error) => {
+                self.layout_generator_config_error.get_or_insert(error);
+            }
+        }
+
+        let hint = self.custom_layout_prompt_hint();
+        if let Some(prompt) = self.custom_layout_prompt.as_mut() {
+            if prompt.input.is_empty() {
+                prompt.error = hint;
+            }
+        }
+    }
+
+    /// Open the state the user submitted while this reload was still in flight.
+    fn resolve_pending_submit(&mut self) {
+        let pending = self
+            .custom_layout_prompt
+            .as_mut()
+            .and_then(|prompt| prompt.pending_submit.take());
+        if let Some(input) = pending {
+            self.open_custom_layout(&input);
         }
     }
 
@@ -720,6 +831,15 @@ impl State {
         if id.is_empty() {
             if let Some(prompt) = self.custom_layout_prompt.as_mut() {
                 prompt.error = Some("Enter a custom state id".to_string());
+            }
+            return true;
+        }
+        // Opening the prompt started a reload. Resolving against a view of
+        // the files that is about to be replaced would be arbitrary, so hold
+        // the input until the result lands.
+        if self.custom_state_reload_in_flight {
+            if let Some(prompt) = self.custom_layout_prompt.as_mut() {
+                prompt.pending_submit = Some(id.to_string());
             }
             return true;
         }
@@ -1933,6 +2053,31 @@ mod tests {
     use super::*;
     use state::Activity;
 
+    fn run_reload_custom_states_script(home: &std::path::Path) -> std::process::Output {
+        std::process::Command::new("sh")
+            .args([
+                "-c",
+                RELOAD_CUSTOM_STATES_SCRIPT,
+                "zellaude-reload-custom-states-test",
+            ])
+            .env("HOME", home)
+            .output()
+            .unwrap()
+    }
+
+    fn generator_sources(
+        settings_json: &str,
+        generator: &str,
+    ) -> layout_generators::CustomStateSources {
+        layout_generators::CustomStateSources {
+            settings_json: settings_json.to_string(),
+            generator_files: vec![layout_generators::GeneratorFile {
+                path: "/generators/g.kdl".to_string(),
+                content: generator.to_string(),
+            }],
+        }
+    }
+
     fn run_save_config_script(
         config_path: &std::path::Path,
         settings_json: &str,
@@ -2116,6 +2261,91 @@ mod tests {
         }
 
         std::fs::remove_dir_all(test_dir).unwrap();
+    }
+
+    #[test]
+    fn custom_state_reload_reads_zellaude_json_and_every_generator_file() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "zellaude-reload-custom-states-{}-{unique}",
+            std::process::id()
+        ));
+        let generators = home.join(".config/zellij/plugins/zellaude/generators");
+        std::fs::create_dir_all(&generators).unwrap();
+        std::fs::write(generators.join("b.kdl"), "command \"b\"\n").unwrap();
+        std::fs::write(generators.join("a.kdl"), "command \"a\"\n").unwrap();
+        std::fs::write(generators.join("notes.txt"), "not a generator").unwrap();
+        std::fs::create_dir(generators.join("nested.kdl")).unwrap();
+
+        let output = run_reload_custom_states_script(&home);
+        assert!(
+            output.status.success(),
+            "reload failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sources: layout_generators::CustomStateSources =
+            serde_json::from_slice(&output.stdout).unwrap();
+
+        assert_eq!(sources.settings_json, "{}");
+        assert_eq!(
+            sources
+                .generator_files
+                .iter()
+                .map(|file| file.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["command \"a\"\n", "command \"b\"\n"]
+        );
+
+        let config_path = home.join(".config/zellij/plugins/zellaude.json");
+        std::fs::write(&config_path, r#"{"min_pane_width": 100}"#).unwrap();
+        let sources: layout_generators::CustomStateSources =
+            serde_json::from_slice(&run_reload_custom_states_script(&home).stdout).unwrap();
+        assert_eq!(sources.settings_json, r#"{"min_pane_width": 100}"#);
+        assert_eq!(sources.generator_files.len(), 2);
+
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_reload_applies_what_parsed_and_keeps_the_last_good_copy_of_what_did_not() {
+        let generator = "command \"g\"\narg \"n\"\ntab {\n    pane \"claude\"\n}\n";
+        let configured =
+            r#"{"custom_states":[{"id":"a","width":1,"height":1,"commands":["true"]}]}"#;
+        let mut state = State::default();
+
+        state.apply_custom_state_sources(&generator_sources(configured, generator));
+        assert!(state.custom_layouts.contains_key("a"));
+        assert_eq!(state.layout_generators.len(), 1);
+        assert_eq!(state.pane_floor_overrides, Default::default());
+
+        // The key is gone from the file, so the state goes with it.
+        state
+            .apply_custom_state_sources(&generator_sources(r#"{"min_pane_width": 80}"#, generator));
+        assert!(state.custom_layouts.is_empty());
+        assert!(state.custom_layout_config_error.is_none());
+        assert_eq!(state.pane_floor_overrides.min_pane_width, Some(80));
+
+        // A document that does not parse leaves the last good states alone.
+        state.apply_custom_state_sources(&generator_sources(configured, generator));
+        state.apply_custom_state_sources(&generator_sources("{ broken", generator));
+        assert!(state.custom_layouts.contains_key("a"));
+        assert!(state.custom_layout_config_error.is_some());
+
+        // So does a generator file that does not parse.
+        state.apply_custom_state_sources(&generator_sources(configured, "command \"g\"\nbogus"));
+        assert_eq!(state.layout_generators.len(), 1);
+        assert!(state.layout_generator_config_error.is_some());
+        state.apply_custom_state_sources(&generator_sources(configured, generator));
+        assert!(state.layout_generator_config_error.is_none());
+
+        // States from the plugin block ignore the file entirely, so a document
+        // without custom_states must not clear them.
+        state.custom_layouts_from_plugin_configuration = true;
+        state.apply_custom_state_sources(&generator_sources("{}", generator));
+        assert!(state.custom_layouts.contains_key("a"));
     }
 
     #[test]
