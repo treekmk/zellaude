@@ -26,13 +26,29 @@ const SOURCE_TAB_VARIABLE: &str = "tab";
 
 const BODY_NODES: [&str; 3] = ["tab", "pane", "each"];
 
-const DECLARATION_NODES: [&str; 5] = [
-    "command",
-    "arg",
-    "flag",
-    "min_pane_width",
-    "min_pane_height",
-];
+/// The declaration nodes. Naming them as a type is what makes `declare`
+/// exhaustive: a sixth one cannot be added without the compiler demanding it be
+/// handled there too.
+enum Declaration {
+    Command,
+    Arg,
+    Flag,
+    MinPaneWidth,
+    MinPaneHeight,
+}
+
+impl Declaration {
+    fn from_node_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "command" => Self::Command,
+            "arg" => Self::Arg,
+            "flag" => Self::Flag,
+            "min_pane_width" => Self::MinPaneWidth,
+            "min_pane_height" => Self::MinPaneHeight,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GeneratorFile {
@@ -643,7 +659,7 @@ pub fn plan_rows(
         return Err("a tab must hold at least one pane".to_string());
     }
     let columns_per_pane = floors.min_pane_width.saturating_add(PANE_FRAME_COLUMNS);
-    let max_columns = geometry.columns / columns_per_pane.max(1);
+    let max_columns = geometry.columns / columns_per_pane;
     if max_columns == 0 {
         return Err(format!(
             "a {pane_count}-pane layout does not fit: each pane needs {columns_per_pane} columns and the tab has {}",
@@ -703,13 +719,13 @@ fn parse_generator(content: &str, source: &str) -> Result<LayoutGenerator, Strin
         let name = node.name().value();
         if BODY_NODES.contains(&name) {
             body_nodes.push(node);
-        } else if DECLARATION_NODES.contains(&name) {
+        } else if let Some(declaration) = Declaration::from_node_name(name) {
             if !body_nodes.is_empty() {
                 return Err(format!(
                     "{name:?} must be declared before the first tab, pane or each node"
                 ));
             }
-            declarations.declare(node)?;
+            declarations.declare(declaration, node)?;
         } else {
             return Err(format!("unknown node {name:?}"));
         }
@@ -750,11 +766,11 @@ impl Declarations {
         }
     }
 
-    fn declare(&mut self, node: &KdlNode) -> Result<(), String> {
+    fn declare(&mut self, declaration: Declaration, node: &KdlNode) -> Result<(), String> {
         reject_children(node)?;
         reject_unknown_properties(node)?;
-        match node.name().value() {
-            "command" => {
+        match declaration {
+            Declaration::Command => {
                 if self.command.is_some() {
                     return Err("command is declared more than once".to_string());
                 }
@@ -764,14 +780,14 @@ impl Declarations {
                 }
                 self.command = Some(command.to_string());
             }
-            "arg" => {
+            Declaration::Arg => {
                 let name = single_string_argument(node)?;
                 self.scope.declare(name, VariableKind::Integer)?;
                 self.args.push(name.to_string());
             }
-            "flag" => self.declare_flag(node)?,
-            "min_pane_width" => set_floor(&mut self.floors.min_pane_width, node)?,
-            _ => set_floor(&mut self.floors.min_pane_height, node)?,
+            Declaration::Flag => self.declare_flag(node)?,
+            Declaration::MinPaneWidth => set_floor(&mut self.floors.min_pane_width, node)?,
+            Declaration::MinPaneHeight => set_floor(&mut self.floors.min_pane_height, node)?,
         }
         Ok(())
     }
