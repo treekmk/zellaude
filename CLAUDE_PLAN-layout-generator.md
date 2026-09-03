@@ -119,7 +119,7 @@ const RELOAD_CUSTOM_STATES_SCRIPT: &str = ...;   // sh + jq: prints the CustomSt
 fn reload_custom_states(&mut self) { ... }                                   // run_command with context type "reload_custom_states"; sets the in-flight flag
 fn apply_custom_state_sources(&mut self, sources: &CustomStateSources) { ... }   // custom_layouts (plugin-block precedence as today), floors, generators, both error slots; refreshes an open prompt's empty-input hint. The result arm resolves pending_submit itself, on the success and the failure path alike, so a submit deferred by a failed read is not swallowed
 fn resolve_custom_state(&self, input: &str, source: &SourceTab) -> Result<Vec<CustomLayout>, String> { ... }   // exact custom_states id → clone; else layout_generators::invoke
-fn prompt_source_tab(&self, tab_position: usize, chrome: &TabChrome) -> Option<SourceTab> { ... }   // TabInfo.name and display_area_* of that position, rows minus chrome.bar_rows
+fn prompt_source_tab(&self, tab_position: usize, chrome: &TabChrome, plugin_location: &str) -> Option<SourceTab> { ... }   // TabInfo.name and display_area_* of that position, rows minus chrome.bar_rows(plugin_location); the caller already holds the location
 ```
 - `open_custom_layout` finds the source tab with `manifest.panes.iter()` (today `.values()`, `src/main.rs:735`, which drops the position key `TabInfo` is looked up by).
 - Name choices: module `layout_generators` mirrors `session_templates`; `PaneFloors`/`min_pane_*` say "pane content floor" so they cannot be read as the grid `width`/`height` that `CustomLayout` and `TemplateTab` already use; `CustomStateSources` names what the envelope is, not how it is fetched.
