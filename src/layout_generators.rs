@@ -257,6 +257,112 @@ pub fn parse_generator_files(files: &[GeneratorFile]) -> Result<Vec<LayoutGenera
     Ok(generators)
 }
 
+/// The variable values one prompt line binds: positionals, flag values and the
+/// flags that were given. Every name binds at most once -- a repeated flag
+/// refuses, and the parser already refused a duplicate declaration.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Bindings {
+    integers: Vec<(String, i64)>,
+    presences: Vec<String>,
+}
+
+impl Bindings {
+    pub(crate) fn integer(&self, name: &str) -> Option<i64> {
+        self.integers
+            .iter()
+            .find(|(bound, _)| bound == name)
+            .map(|(_, value)| *value)
+    }
+
+    pub(crate) fn is_present(&self, name: &str) -> bool {
+        self.presences.iter().any(|bound| bound == name)
+    }
+}
+
+/// Match the line's first whitespace-separated token against the declared
+/// commands, returning the generator and the tokens left to bind.
+pub(crate) fn select_generator<'a, 'b>(
+    generators: &'a [LayoutGenerator],
+    input: &'b str,
+) -> Option<(&'a LayoutGenerator, Vec<&'b str>)> {
+    let mut tokens = input.split_whitespace();
+    let command = tokens.next()?;
+    let generator = generators
+        .iter()
+        .find(|generator| generator.command == command)?;
+    Some((generator, tokens.collect()))
+}
+
+impl LayoutGenerator {
+    /// Bind the tokens after the command: positionals in declaration order,
+    /// flags in any order, defaults for whatever the line left out.
+    pub(crate) fn bind_arguments(&self, tokens: &[&str]) -> Result<Bindings, String> {
+        let mut bindings = Bindings::default();
+        let mut positionals: Vec<(&str, i64)> = Vec::new();
+        let mut index = 0;
+        while let Some(token) = tokens.get(index) {
+            index += 1;
+            let Some(name) = token.strip_prefix("--") else {
+                positionals.push((token, parse_integer_token(token)?));
+                continue;
+            };
+            let flag = self
+                .flags
+                .iter()
+                .find(|declared| declared.flag == name)
+                .ok_or_else(|| format!("unknown flag --{name}"))?;
+            if bindings.is_present(&flag.presence) {
+                return Err(format!("flag --{name} is given more than once"));
+            }
+            bindings.presences.push(flag.presence.clone());
+            let Some(value) = &flag.value else { continue };
+            match tokens.get(index).and_then(|token| token.parse::<i64>().ok()) {
+                Some(number) => {
+                    bindings.integers.push((value.variable.clone(), number));
+                    index += 1;
+                }
+                None if value.optional => {}
+                None => {
+                    return Err(match tokens.get(index) {
+                        Some(token) => {
+                            format!("flag --{name} needs an integer value, got {token:?}")
+                        }
+                        None => format!("flag --{name} needs an integer value"),
+                    })
+                }
+            }
+        }
+
+        for (position, name) in self.args.iter().enumerate() {
+            let Some((_, value)) = positionals.get(position) else {
+                return Err(format!("missing argument {name:?}"));
+            };
+            bindings.integers.push((name.clone(), *value));
+        }
+        if let Some((token, _)) = positionals.get(self.args.len()) {
+            return Err(format!("unexpected argument {token:?}"));
+        }
+
+        for flag in &self.flags {
+            let Some(value) = &flag.value else { continue };
+            if bindings.integer(&value.variable).is_some() {
+                continue;
+            }
+            match value.default {
+                Some(default) => bindings.integers.push((value.variable.clone(), default)),
+                None => return Err(format!("missing required flag --{}", flag.flag)),
+            }
+        }
+        Ok(bindings)
+    }
+}
+
+fn parse_integer_token(token: &str) -> Result<i64, String> {
+    token
+        .parse::<i64>()
+        .map_err(|_| format!("argument {token:?} must be an integer"))
+}
+
 fn parse_generator(content: &str, source: &str) -> Result<LayoutGenerator, String> {
     let document = content
         .parse::<KdlDocument>()

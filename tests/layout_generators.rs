@@ -6,17 +6,19 @@ mod custom_layouts;
 mod layout_generators;
 
 use layout_generators::{
-    parse_floor_overrides, parse_generator_files, FloorOverrides, GeneratorFile, LayoutGenerator,
-    PaneFloors, DEFAULT_MIN_PANE_HEIGHT, DEFAULT_MIN_PANE_WIDTH,
+    parse_floor_overrides, parse_generator_files, select_generator, Bindings, FloorOverrides,
+    GeneratorFile, LayoutGenerator, PaneFloors, DEFAULT_MIN_PANE_HEIGHT, DEFAULT_MIN_PANE_WIDTH,
 };
 
-/// The generator the README documents, and the shape the run's own layouts use.
+/// The canonical `madev.kdl` of the PLAN's vocabulary block, verbatim.
 pub const MADEV_GENERATOR: &str = r#"
 command "impl"
 arg "n"
-flag "crit-per-impl" value="m" default=2
+flag "crit-per-impl" value="m" default=1
 flag "single-tab"
 flag "only-crit" optional-value="from" default=1
+min_pane_width 54
+min_pane_height 12
 
 tab "{tab}-impl" unless="single_tab only_crit" {
     each for="i" in="1..=n" {
@@ -32,10 +34,8 @@ each for="k" in="from..from+m" {
 }
 tab if="single_tab" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i}"
-    }
-    each for="k" in="from..from+m" {
-        each for="i" in="1..=n" {
+        pane "claude -n impl{i}" unless="only_crit"
+        each for="k" in="from..from+m" {
             pane "claude -n impl{i}-crit{k}"
         }
     }
@@ -311,4 +311,140 @@ fn reads_the_floor_keys_of_zellaude_json() {
         .contains("min_pane_width must be a non-negative integer"));
     assert!(parse_floor_overrides(r#"{"min_pane_height": -1}"#).is_err());
     assert!(parse_floor_overrides("{").is_err());
+}
+
+fn bind(content: &str, line: &str) -> Result<Bindings, String> {
+    let generators = parse_generator_files(&[file("/g/impl.kdl", content)]).unwrap();
+    let (generator, tokens) = select_generator(&generators, line).expect("a command matches");
+    generator.bind_arguments(&tokens)
+}
+
+fn madev_bindings(line: &str) -> Bindings {
+    bind(MADEV_GENERATOR, line).unwrap_or_else(|error| panic!("{line:?} refused: {error}"))
+}
+
+fn madev_refusal(line: &str) -> String {
+    bind(MADEV_GENERATOR, line).expect_err("expected a refusal")
+}
+
+#[test]
+fn selects_the_generator_by_the_first_token() {
+    let generators = parse_generator_files(&[
+        file("/g/a.kdl", "command \"impl\"\narg \"n\"\n"),
+        file("/g/b.kdl", "command \"chat\"\n"),
+    ])
+    .unwrap();
+    let (generator, tokens) = select_generator(&generators, "chat --x 1").unwrap();
+    assert_eq!(generator.command, "chat");
+    assert_eq!(tokens, ["--x", "1"]);
+    assert!(select_generator(&generators, "nope 4").is_none());
+    assert!(select_generator(&generators, "").is_none());
+    assert!(select_generator(&generators, "   ").is_none());
+}
+
+#[test]
+fn binds_positionals_and_flags_in_any_order() {
+    for line in [
+        "impl 4 --crit-per-impl 2 --only-crit 3",
+        "impl --crit-per-impl 2 4 --only-crit 3",
+        "impl --only-crit 3 --crit-per-impl 2 4",
+    ] {
+        let bindings = madev_bindings(line);
+        assert_eq!(bindings.integer("n"), Some(4), "{line}");
+        assert_eq!(bindings.integer("m"), Some(2), "{line}");
+        assert_eq!(bindings.integer("from"), Some(3), "{line}");
+        assert!(bindings.is_present("only_crit"), "{line}");
+        assert!(bindings.is_present("crit_per_impl"), "{line}");
+        assert!(!bindings.is_present("single_tab"), "{line}");
+    }
+}
+
+#[test]
+fn binds_every_flags_presence() {
+    let bindings = madev_bindings("impl 4 --single-tab");
+    assert!(bindings.is_present("single_tab"));
+    assert!(!bindings.is_present("crit_per_impl"));
+    assert!(!bindings.is_present("only_crit"));
+}
+
+#[test]
+fn fills_defaults_for_whatever_the_line_leaves_out() {
+    let bindings = madev_bindings("impl 4");
+    assert_eq!(bindings.integer("n"), Some(4));
+    assert_eq!(bindings.integer("m"), Some(1));
+    assert_eq!(bindings.integer("from"), Some(1));
+    assert!(!bindings.is_present("only_crit"));
+}
+
+#[test]
+fn takes_an_optional_value_only_when_one_follows() {
+    let given = madev_bindings("impl 4 --only-crit 2");
+    assert_eq!(given.integer("from"), Some(2));
+    assert!(given.is_present("only_crit"));
+
+    // Bare, at the end of the line and before another flag.
+    for line in ["impl 4 --only-crit", "impl 4 --only-crit --single-tab"] {
+        let bindings = madev_bindings(line);
+        assert_eq!(bindings.integer("from"), Some(1), "{line}");
+        assert!(bindings.is_present("only_crit"), "{line}");
+    }
+    assert!(madev_bindings("impl 4 --only-crit --single-tab").is_present("single_tab"));
+}
+
+#[test]
+fn requires_a_value_flag_that_has_no_default() {
+    let content = "command \"c\"\nflag \"width\" value=\"w\"\n";
+    assert_eq!(bind(content, "c --width 7").unwrap().integer("w"), Some(7));
+    assert_eq!(
+        bind(content, "c").unwrap_err(),
+        "missing required flag --width"
+    );
+}
+
+#[test]
+fn refuses_a_repeated_flag() {
+    assert_eq!(
+        madev_refusal("impl 4 --crit-per-impl 2 --crit-per-impl 3"),
+        "flag --crit-per-impl is given more than once"
+    );
+    assert_eq!(
+        madev_refusal("impl 4 --single-tab --single-tab"),
+        "flag --single-tab is given more than once"
+    );
+    assert_eq!(
+        madev_refusal("impl 4 --only-crit 2 --only-crit"),
+        "flag --only-crit is given more than once"
+    );
+}
+
+#[test]
+fn refuses_an_unknown_flag() {
+    assert_eq!(madev_refusal("impl 4 --nope"), "unknown flag --nope");
+    assert_eq!(madev_refusal("impl 4 --"), "unknown flag --");
+}
+
+#[test]
+fn refuses_a_missing_or_non_integer_flag_value() {
+    assert_eq!(
+        madev_refusal("impl 4 --crit-per-impl"),
+        "flag --crit-per-impl needs an integer value"
+    );
+    assert_eq!(
+        madev_refusal("impl 4 --crit-per-impl two"),
+        "flag --crit-per-impl needs an integer value, got \"two\""
+    );
+    assert_eq!(
+        madev_refusal("impl 4 --crit-per-impl --single-tab"),
+        "flag --crit-per-impl needs an integer value, got \"--single-tab\""
+    );
+}
+
+#[test]
+fn refuses_a_non_integer_missing_or_leftover_positional() {
+    assert_eq!(
+        madev_refusal("impl four"),
+        "argument \"four\" must be an integer"
+    );
+    assert_eq!(madev_refusal("impl --single-tab"), "missing argument \"n\"");
+    assert_eq!(madev_refusal("impl 4 5"), "unexpected argument \"5\"");
 }
