@@ -5,10 +5,18 @@ mod custom_layouts;
 #[path = "../src/layout_generators.rs"]
 mod layout_generators;
 
+use custom_layouts::{tabs_to_kdl, CommandGrid, CustomLayout, TabChrome};
 use layout_generators::{
-    parse_floor_overrides, parse_generator_files, select_generator, Bindings, FloorOverrides,
-    GeneratorFile, LayoutGenerator, PaneFloors, DEFAULT_MIN_PANE_HEIGHT, DEFAULT_MIN_PANE_WIDTH,
+    invoke, parse_floor_overrides, parse_generator_files, plan_rows, select_generator, Bindings,
+    FloorOverrides, GeneratorFile, LayoutGenerator, PaneFloors, SourceTab, TabGeometry,
+    DEFAULT_MIN_PANE_HEIGHT, DEFAULT_MIN_PANE_WIDTH,
 };
+use std::collections::BTreeMap;
+use std::process::Command;
+use zellij_utils::input::layout::{Layout, Run};
+use zellij_utils::pane_size::PaneGeom;
+
+const ZELLAUDE_URL: &str = "file:/tmp/zellaude.wasm";
 
 /// The canonical `madev.kdl` of the PLAN's vocabulary block, verbatim.
 pub const MADEV_GENERATOR: &str = r#"
@@ -447,4 +455,378 @@ fn refuses_a_non_integer_missing_or_leftover_positional() {
     );
     assert_eq!(madev_refusal("impl --single-tab"), "missing argument \"n\"");
     assert_eq!(madev_refusal("impl 4 5"), "unexpected argument \"5\"");
+}
+
+
+fn source(name: &str) -> SourceTab {
+    SourceTab {
+        name: name.to_string(),
+        geometry: TabGeometry {
+            columns: 284,
+            rows: 50,
+        },
+    }
+}
+
+fn open(content: &str, line: &str, source: &SourceTab) -> Result<Vec<CustomLayout>, String> {
+    let generators = parse_generator_files(&[file("/g/impl.kdl", content)]).unwrap();
+    invoke(&generators, line, source, FloorOverrides::default())
+}
+
+fn madev(line: &str) -> Vec<CustomLayout> {
+    open(MADEV_GENERATOR, line, &source("src"))
+        .unwrap_or_else(|error| panic!("{line:?} refused: {error}"))
+}
+
+fn names(layouts: &[CustomLayout]) -> Vec<&str> {
+    layouts.iter().map(|layout| layout.id.as_str()).collect()
+}
+
+fn rows(layout: &CustomLayout) -> &Vec<Vec<String>> {
+    match &layout.commands {
+        CommandGrid::Rows(rows) => rows,
+        CommandGrid::Flat(_) => panic!("a generator emits rows"),
+    }
+}
+
+fn commands(layout: &CustomLayout) -> Vec<&str> {
+    rows(layout)
+        .iter()
+        .flatten()
+        .map(String::as_str)
+        .collect()
+}
+
+fn row_shape(layout: &CustomLayout) -> Vec<usize> {
+    rows(layout).iter().map(Vec::len).collect()
+}
+
+fn default_floors() -> PaneFloors {
+    PaneFloors::resolve(FloorOverrides::default(), FloorOverrides::default())
+}
+
+#[test]
+fn expands_the_madev_file_the_three_documented_ways() {
+    let per_role = madev("impl 4 --crit-per-impl 2");
+    assert_eq!(names(&per_role), ["src-impl", "src-crit1", "src-crit2"]);
+    assert_eq!(commands(&per_role[0]).len(), 4);
+    assert_eq!(commands(&per_role[0])[0], "claude -n impl1");
+    assert_eq!(commands(&per_role[2])[3], "claude -n impl4-crit2");
+
+    // One tab, impl-major: every implementer sits beside its own critics.
+    let single = madev("impl 4 --single-tab");
+    assert_eq!(names(&single), ["src-1"]);
+    assert_eq!(
+        commands(&single[0]),
+        [
+            "claude -n impl1",
+            "claude -n impl1-crit1",
+            "claude -n impl2",
+            "claude -n impl2-crit1",
+            "claude -n impl3",
+            "claude -n impl3-crit1",
+            "claude -n impl4",
+            "claude -n impl4-crit1",
+        ]
+    );
+
+    let resumed = madev("impl 4 --crit-per-impl 2 --only-crit 2");
+    assert_eq!(names(&resumed), ["src-crit2", "src-crit3"]);
+    assert_eq!(commands(&resumed[0])[0], "claude -n impl1-crit2");
+}
+
+#[test]
+fn names_unnamed_tabs_after_the_source_tab_in_emission_order() {
+    let content = "command \"g\"\narg \"n\"\neach for=\"k\" in=\"1..=n\" {\n tab {\n pane \"p{k}\"\n }\n}\n";
+    let layouts = open(content, "g 3", &source("e2e")).unwrap();
+    assert_eq!(names(&layouts), ["e2e-1", "e2e-2", "e2e-3"]);
+    assert_eq!(commands(&layouts[2]), ["p3"]);
+}
+
+#[test]
+fn orders_nested_each_loops_i_major() {
+    let content = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"1..=n\" {\n each for=\"j\" in=\"1..=2\" {\n pane \"p{i}{j}\"\n }\n }\n}\n";
+    let layouts = open(content, "g 2", &source("src")).unwrap();
+    assert_eq!(commands(&layouts[0]), ["p11", "p12", "p21", "p22"]);
+}
+
+#[test]
+fn substitutes_declared_names_and_leaves_other_braces_alone() {
+    let content = "command \"g\"\narg \"n\"\ntab \"t\" {\n each for=\"i\" in=\"1..=n\" {\n pane \"run {i} ${HOME}/{a,b} {nope}\"\n }\n}\n";
+    let layouts = open(content, "g 1", &source("src")).unwrap();
+    assert_eq!(commands(&layouts[0]), ["run 1 ${HOME}/{a,b} {nope}"]);
+}
+
+#[test]
+fn conditions_apply_to_tab_pane_and_each_alike() {
+    let content = "command \"c\"\narg \"n\"\nflag \"wide\"\nflag \"solo\"\n\
+tab \"keep\" unless=\"solo\" {\n pane \"always\"\n pane \"wide-only\" if=\"wide\"\n \
+each for=\"i\" in=\"1..=n\" if=\"wide\" {\n pane \"loop{i}\"\n }\n}\n\
+tab \"solo-only\" if=\"solo\" {\n pane \"s\"\n}\n";
+
+    let plain = open(content, "c 2", &source("src")).unwrap();
+    assert_eq!(names(&plain), ["keep"]);
+    assert_eq!(commands(&plain[0]), ["always"]);
+
+    let wide = open(content, "c 2 --wide", &source("src")).unwrap();
+    assert_eq!(commands(&wide[0]), ["always", "wide-only", "loop1", "loop2"]);
+
+    let solo = open(content, "c 2 --solo", &source("src")).unwrap();
+    assert_eq!(names(&solo), ["solo-only"]);
+}
+
+#[test]
+fn plans_rows_with_the_larger_rows_last() {
+    let geometry = TabGeometry {
+        columns: 284,
+        rows: 50,
+    };
+    assert_eq!(plan_rows(7, geometry, default_floors()).unwrap(), [3, 4]);
+    assert_eq!(plan_rows(12, geometry, default_floors()).unwrap(), [4, 4, 4]);
+    assert_eq!(plan_rows(1, geometry, default_floors()).unwrap(), [1]);
+    assert_eq!(plan_rows(5, geometry, default_floors()).unwrap(), [5]);
+    assert!(plan_rows(0, geometry, default_floors()).is_err());
+}
+
+#[test]
+fn refuses_a_layout_that_does_not_fit_the_tab() {
+    let narrow = TabGeometry {
+        columns: 50,
+        rows: 50,
+    };
+    let width = plan_rows(2, narrow, default_floors()).unwrap_err();
+    assert!(width.contains("does not fit"), "{width}");
+
+    let short = TabGeometry {
+        columns: 284,
+        rows: 20,
+    };
+    let height = plan_rows(12, short, default_floors()).unwrap_err();
+    assert!(height.contains("does not fit"), "{height}");
+
+    // Through invoke, the refusal carries the file's basename.
+    let content = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"1..=n\" {\n pane \"p{i}\"\n }\n}\n";
+    let refusal = open(
+        content,
+        "g 12",
+        &SourceTab {
+            name: "src".to_string(),
+            geometry: short,
+        },
+    )
+    .unwrap_err();
+    assert!(refusal.starts_with("impl.kdl: "), "{refusal}");
+    assert!(refusal.contains("does not fit"), "{refusal}");
+}
+
+#[test]
+fn refuses_a_negative_overflowing_or_overlong_range() {
+    let content = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"1..=n\" {\n pane \"p{i}\"\n }\n}\n";
+    let negative = open(content, "g -4", &source("src")).unwrap_err();
+    assert_eq!(
+        negative,
+        "impl.kdl: range \"1..=n\" must not run below zero, but evaluates to 1..=-4"
+    );
+
+    let overflow = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"n..=n+9223372036854775807\" {\n pane \"p{i}\"\n }\n}\n";
+    assert_eq!(
+        open(overflow, "g 1", &source("src")).unwrap_err(),
+        "impl.kdl: range \"n..=n+9223372036854775807\" overflows"
+    );
+
+    let long = open(content, "g 200", &source("src")).unwrap_err();
+    assert!(long.contains("runs for 200 steps"), "{long}");
+
+    // The exclusive end is stepped back only after the sign check, so a bound of
+    // i64::MIN refuses instead of underflowing.
+    let floor = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"0..n-9223372036854775807\" {\n pane \"p{i}\"\n }\n}\n";
+    assert!(open(floor, "g -1", &source("src"))
+        .unwrap_err()
+        .contains("must not run below zero"));
+}
+
+#[test]
+fn an_empty_range_leaves_the_tab_empty_and_refuses() {
+    let content = "command \"g\"\narg \"n\"\ntab \"t\" {\n each for=\"i\" in=\"1..n\" {\n pane \"p{i}\"\n }\n}\n";
+    assert_eq!(
+        open(content, "g 1", &source("src")).unwrap_err(),
+        "impl.kdl: tab \"t\" has no panes"
+    );
+}
+
+#[test]
+fn refuses_an_invocation_that_opens_no_tabs() {
+    let content = "command \"g\"\nflag \"solo\"\ntab \"t\" if=\"solo\" {\n pane \"p\"\n}\n";
+    assert_eq!(
+        open(content, "g", &source("src")).unwrap_err(),
+        "impl.kdl: this invocation opens no tabs"
+    );
+}
+
+#[test]
+fn refuses_a_source_tab_name_that_cannot_be_an_id() {
+    let content = "command \"g\"\ntab \"{tab}-t\" {\n pane \"p\"\n}\n";
+    let long = "x".repeat(200);
+    let refusal = open(content, "g", &source(&long)).unwrap_err();
+    assert!(refusal.starts_with("impl.kdl: tab name"), "{refusal}");
+    assert!(refusal.contains("exceeds"), "{refusal}");
+
+    let control = open(content, "g", &source("a\u{1}b")).unwrap_err();
+    assert!(control.contains("control characters"), "{control}");
+
+    // A tab can be renamed to " x ", which CustomLayout::validate would reject
+    // in its own voice if the generator did not judge it first.
+    assert_eq!(
+        open(content, "g", &source(" x ")).unwrap_err(),
+        "impl.kdl: tab name \" x -t\" must not start or end with whitespace"
+    );
+}
+
+#[test]
+fn refuses_more_tabs_than_the_maximum() {
+    // Nested each levels multiply past the per-range cap, so the total is
+    // bounded where tabs are created rather than after they are all built.
+    let nested = "command \"g\"\neach for=\"i\" in=\"1..=64\" {\n each for=\"j\" in=\"1..=64\" {\n tab {\n pane \"p\"\n }\n }\n}\n";
+    assert_eq!(
+        open(nested, "g", &source("src")).unwrap_err(),
+        "impl.kdl: this invocation opens more than 64 tabs"
+    );
+
+    // A single range of 65 steps trips the per-range cap first, so it says
+    // nothing about the tab cap -- pin which cap speaks.
+    let counted = "command \"g\"\narg \"n\"\neach for=\"i\" in=\"1..=n\" {\n tab {\n pane \"p\"\n }\n}\n";
+    assert_eq!(open(counted, "g 64", &source("src")).unwrap().len(), 64);
+    assert_eq!(
+        open(counted, "g 65", &source("src")).unwrap_err(),
+        "impl.kdl: range \"1..=n\" runs for 65 steps; the maximum is 64"
+    );
+
+    // The tab cap's own boundary, with neither range above the per-range cap.
+    let grid = "command \"g\"\narg \"a\"\narg \"b\"\neach for=\"i\" in=\"1..=a\" {\n each for=\"j\" in=\"1..=b\" {\n tab {\n pane \"p\"\n }\n }\n}\n";
+    assert_eq!(open(grid, "g 16 4", &source("src")).unwrap().len(), 64);
+    assert_eq!(
+        open(grid, "g 13 5", &source("src")).unwrap_err(),
+        "impl.kdl: this invocation opens more than 64 tabs"
+    );
+    assert_eq!(
+        open(grid, "g 33 2", &source("src")).unwrap_err(),
+        "impl.kdl: this invocation opens more than 64 tabs"
+    );
+}
+
+#[test]
+fn refuses_an_unknown_command() {
+    let generators = parse_generator_files(&[file("/g/impl.kdl", MADEV_GENERATOR)]).unwrap();
+    assert_eq!(
+        invoke(&generators, "nope 4", &source("src"), FloorOverrides::default()).unwrap_err(),
+        "Unknown custom state or generator \"nope\""
+    );
+}
+
+#[test]
+fn takes_the_files_floors_over_the_global_ones() {
+    let content = "command \"g\"\narg \"n\"\nmin_pane_width 140\ntab {\n each for=\"i\" in=\"1..=n\" {\n pane \"p{i}\"\n }\n}\n";
+    // 284 columns fit two panes at a 140-column floor, so four panes need two rows.
+    let layouts = open(content, "g 4", &source("src")).unwrap();
+    assert_eq!(row_shape(&layouts[0]), [2, 2]);
+}
+
+#[test]
+fn single_quotes_the_source_tab_name_inside_a_command() {
+    let content = "command \"g\"\ntab \"{tab}-t\" {\n pane \"printf %s {tab}\"\n}\n";
+    for name in ["it's", "x'; id; '"] {
+        let layouts = open(content, "g", &source(name)).unwrap();
+        assert_eq!(layouts[0].id, format!("{name}-t"), "raw in the tab name");
+
+        let emitted = shell_commands(&layouts);
+        assert_eq!(emitted.len(), 1);
+        let printed = Command::new("sh")
+            .arg("-lc")
+            .arg(&emitted[0])
+            .output()
+            .expect("sh runs");
+        assert_eq!(
+            String::from_utf8_lossy(&printed.stdout),
+            *name,
+            "{:?} must reach printf as one literal word",
+            emitted[0]
+        );
+    }
+}
+
+/// The shell commands of a generated layout, read back out of the emitted KDL.
+fn shell_commands(layouts: &[CustomLayout]) -> Vec<String> {
+    let kdl = tabs_to_kdl(
+        layouts,
+        ZELLAUDE_URL,
+        &BTreeMap::new(),
+        None,
+        &TabChrome::default(),
+    )
+    .unwrap();
+    let parsed = Layout::from_kdl(&kdl, Some("generated.kdl".to_string()), None, None).unwrap();
+    parsed
+        .tabs
+        .iter()
+        .flat_map(|(_, tiled, _)| tiled.extract_run_instructions())
+        .filter_map(|run| match run {
+            Some(Run::Command(command)) => command.args.get(1).cloned(),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn every_generated_tab_round_trips_through_zellij_with_the_planned_geometry() {
+    let content = "command \"g\"\narg \"n\"\ntab {\n each for=\"i\" in=\"1..=n\" {\n pane \"cmd{i}\"\n }\n}\n";
+    let layouts = open(content, "g 7", &source("src")).unwrap();
+    assert_eq!(row_shape(&layouts[0]), [3, 4]);
+
+    let kdl = tabs_to_kdl(
+        &layouts,
+        ZELLAUDE_URL,
+        &BTreeMap::new(),
+        None,
+        &TabChrome::default(),
+    )
+    .unwrap();
+    let parsed = Layout::from_kdl(&kdl, Some("generated.kdl".to_string()), None, None).unwrap();
+    assert_eq!(parsed.tabs.len(), 1);
+
+    let mut space = PaneGeom::default();
+    space.cols.set_inner(284);
+    space.rows.set_inner(50);
+    let mut positioned: Vec<(String, usize, usize, usize, usize)> = parsed.tabs[0]
+        .1
+        .position_panes_in_space(&space, None, false, false)
+        .unwrap()
+        .iter()
+        .filter_map(|(pane, geometry)| match &pane.run {
+            Some(Run::Command(command)) => Some((
+                command.args.get(1).cloned().unwrap_or_default(),
+                geometry.x,
+                geometry.y,
+                geometry.cols.as_usize(),
+                geometry.rows.as_usize(),
+            )),
+            _ => None,
+        })
+        .collect();
+    positioned.sort_by_key(|(_, x, y, _, _)| (*y, *x));
+    let shape: Vec<(String, usize, usize)> = positioned
+        .iter()
+        .map(|(command, _, y, cols, _)| (command.clone(), *y, *cols))
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            ("cmd1".to_string(), 1, 94),
+            ("cmd2".to_string(), 1, 94),
+            ("cmd3".to_string(), 1, 96),
+            ("cmd4".to_string(), 26, 71),
+            ("cmd5".to_string(), 26, 71),
+            ("cmd6".to_string(), 26, 71),
+            ("cmd7".to_string(), 26, 71),
+        ]
+    );
 }

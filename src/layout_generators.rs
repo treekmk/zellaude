@@ -6,11 +6,19 @@
 use kdl::{KdlDocument, KdlNode, KdlValue};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+use std::fmt::Write;
+
+use crate::custom_layouts::{CommandGrid, CustomLayout, MAX_ID_CHARACTERS, MAX_PANES};
 
 pub const DEFAULT_MIN_PANE_WIDTH: usize = 54; // content columns
 pub const DEFAULT_MIN_PANE_HEIGHT: usize = 12; // content rows
 pub const PANE_FRAME_COLUMNS: usize = 2; // Zellij frame cost per pane
 pub const PANE_FRAME_ROWS: usize = 2;
+
+/// Tabs one invocation may open. Shares MAX_PANES' value but not its meaning:
+/// nested `each` levels multiply past the per-range cap, and the cost of those
+/// tabs lands on Zellij rather than inside one tab.
+pub const MAX_GENERATED_TABS: usize = 64;
 
 /// Bound to the name of the tab the prompt was opened from.
 const SOURCE_TAB_VARIABLE: &str = "tab";
@@ -116,7 +124,7 @@ pub struct LayoutGenerator {
     args: Vec<String>,
     flags: Vec<FlagDeclaration>,
     floors: FloorOverrides,
-    body: Vec<BodyNode>,
+    body: Vec<TabNode>,
 }
 
 #[derive(Debug)]
@@ -136,13 +144,25 @@ struct FlagValue {
     default: Option<i64>,
 }
 
+/// A node in tab position: the top level, or inside an `each` rooted there.
 #[derive(Debug)]
-enum BodyNode {
+enum TabNode {
     Tab {
         name: Option<Vec<TemplatePiece>>,
         condition: Condition,
-        body: Vec<BodyNode>,
+        body: Vec<PaneNode>,
     },
+    Each {
+        variable: String,
+        range: Range,
+        condition: Condition,
+        body: Vec<TabNode>,
+    },
+}
+
+/// A node in pane position: inside a `tab`, or inside an `each` rooted there.
+#[derive(Debug)]
+enum PaneNode {
     Pane {
         command: Vec<TemplatePiece>,
         condition: Condition,
@@ -151,7 +171,7 @@ enum BodyNode {
         variable: String,
         range: Range,
         condition: Condition,
-        body: Vec<BodyNode>,
+        body: Vec<PaneNode>,
     },
 }
 
@@ -169,6 +189,8 @@ struct Condition {
 
 #[derive(Debug)]
 struct Range {
+    /// As written in `in=`, for refusals.
+    text: String,
     start: Endpoint,
     end: Endpoint,
     inclusive: bool,
@@ -277,6 +299,21 @@ impl Bindings {
     pub(crate) fn is_present(&self, name: &str) -> bool {
         self.presences.iter().any(|bound| bound == name)
     }
+
+    fn bind_loop(&mut self, name: &str, value: i64) {
+        self.integers.push((name.to_string(), value));
+    }
+
+    fn unbind_loop(&mut self) {
+        self.integers.pop();
+    }
+}
+
+impl Condition {
+    fn holds(&self, bindings: &Bindings) -> bool {
+        self.required.iter().all(|name| bindings.is_present(name))
+            && !self.forbidden.iter().any(|name| bindings.is_present(name))
+    }
 }
 
 /// Match the line's first whitespace-separated token against the declared
@@ -357,6 +394,297 @@ impl LayoutGenerator {
     }
 }
 
+/// Expand a prompt line into one `CustomLayout` per tab it opens.
+pub fn invoke(
+    generators: &[LayoutGenerator],
+    input: &str,
+    source: &SourceTab,
+    global_floors: FloorOverrides,
+) -> Result<Vec<CustomLayout>, String> {
+    let Some((generator, tokens)) = select_generator(generators, input) else {
+        let command = input.split_whitespace().next().unwrap_or(input);
+        return Err(format!("Unknown custom state or generator {command:?}"));
+    };
+    generator
+        .expand(&tokens, source, global_floors)
+        .map_err(|message| format!("{}: {message}", generator.source))
+}
+
+/// One tab an invocation opens, before its grid is planned.
+struct EmittedTab {
+    name: String,
+    commands: Vec<String>,
+}
+
+/// How `{tab}` renders in each position. A tab name is not shell, so it takes
+/// the source name raw; a command is, so it takes it single-quoted and can
+/// never be re-parsed by `sh -lc` however the tab was named.
+struct SourceTabText {
+    raw: String,
+    quoted: String,
+}
+
+impl LayoutGenerator {
+    fn expand(
+        &self,
+        tokens: &[&str],
+        source: &SourceTab,
+        global_floors: FloorOverrides,
+    ) -> Result<Vec<CustomLayout>, String> {
+        let mut bindings = self.bind_arguments(tokens)?;
+        let source_text = SourceTabText {
+            raw: source.name.clone(),
+            quoted: shell_quote(&source.name),
+        };
+        let mut tabs = Vec::new();
+        expand_tabs(&self.body, &mut bindings, &source_text, &mut tabs)?;
+        if tabs.is_empty() {
+            return Err("this invocation opens no tabs".to_string());
+        }
+        let floors = PaneFloors::resolve(self.floors, global_floors);
+        tabs.into_iter()
+            .map(|tab| build_layout(tab, source.geometry, floors))
+            .collect()
+    }
+}
+
+fn expand_tabs(
+    nodes: &[TabNode],
+    bindings: &mut Bindings,
+    source: &SourceTabText,
+    tabs: &mut Vec<EmittedTab>,
+) -> Result<(), String> {
+    for node in nodes {
+        match node {
+            TabNode::Tab {
+                name,
+                condition,
+                body,
+            } => {
+                if !condition.holds(bindings) {
+                    continue;
+                }
+                let name = match name {
+                    Some(pieces) => render(pieces, bindings, &source.raw)?,
+                    None => format!("{}-{}", source.raw, tabs.len() + 1),
+                };
+                validate_tab_name(&name)?;
+                let mut commands = Vec::new();
+                expand_panes(body, bindings, source, &mut commands)?;
+                if commands.is_empty() {
+                    return Err(format!("tab {name:?} has no panes"));
+                }
+                tabs.push(EmittedTab { name, commands });
+                if tabs.len() > MAX_GENERATED_TABS {
+                    return Err(format!(
+                        "this invocation opens more than {MAX_GENERATED_TABS} tabs"
+                    ));
+                }
+            }
+            TabNode::Each {
+                variable,
+                range,
+                condition,
+                body,
+            } => {
+                if !condition.holds(bindings) {
+                    continue;
+                }
+                for value in evaluate_range(range, bindings)? {
+                    bindings.bind_loop(variable, value);
+                    let expanded = expand_tabs(body, bindings, source, tabs);
+                    bindings.unbind_loop();
+                    expanded?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn expand_panes(
+    nodes: &[PaneNode],
+    bindings: &mut Bindings,
+    source: &SourceTabText,
+    commands: &mut Vec<String>,
+) -> Result<(), String> {
+    for node in nodes {
+        match node {
+            PaneNode::Pane { command, condition } => {
+                if condition.holds(bindings) {
+                    commands.push(render(command, bindings, &source.quoted)?);
+                }
+            }
+            PaneNode::Each {
+                variable,
+                range,
+                condition,
+                body,
+            } => {
+                if !condition.holds(bindings) {
+                    continue;
+                }
+                for value in evaluate_range(range, bindings)? {
+                    bindings.bind_loop(variable, value);
+                    let expanded = expand_panes(body, bindings, source, commands);
+                    bindings.unbind_loop();
+                    expanded?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_range(range: &Range, bindings: &Bindings) -> Result<Vec<i64>, String> {
+    let text = &range.text;
+    let start = evaluate_endpoint(&range.start, bindings, text)?;
+    let end = evaluate_endpoint(&range.end, bindings, text)?;
+    if start < 0 || end < 0 {
+        return Err(format!(
+            "range {text:?} must not run below zero, but evaluates to {start}..{}{end}",
+            if range.inclusive { "=" } else { "" }
+        ));
+    }
+    // Only now can the exclusive end be stepped back without underflowing.
+    let last = if range.inclusive { end } else { end - 1 };
+    let steps = last.saturating_sub(start).saturating_add(1).max(0);
+    if steps > MAX_PANES as i64 {
+        return Err(format!(
+            "range {text:?} runs for {steps} steps; the maximum is {MAX_PANES}"
+        ));
+    }
+    Ok((start..=last).collect())
+}
+
+fn evaluate_endpoint(endpoint: &Endpoint, bindings: &Bindings, text: &str) -> Result<i64, String> {
+    let head = evaluate_term(&endpoint.head, bindings)?;
+    let Some((sign, term)) = &endpoint.tail else {
+        return Ok(head);
+    };
+    let tail = evaluate_term(term, bindings)?;
+    match sign {
+        Sign::Plus => head.checked_add(tail),
+        Sign::Minus => head.checked_sub(tail),
+    }
+    .ok_or_else(|| format!("range {text:?} overflows"))
+}
+
+fn evaluate_term(term: &Term, bindings: &Bindings) -> Result<i64, String> {
+    match term {
+        Term::Literal(value) => Ok(*value),
+        Term::Variable(name) => bindings
+            .integer(name)
+            .ok_or_else(|| format!("variable {name:?} is not bound")),
+    }
+}
+
+fn render(
+    pieces: &[TemplatePiece],
+    bindings: &Bindings,
+    source_tab: &str,
+) -> Result<String, String> {
+    let mut rendered = String::new();
+    for piece in pieces {
+        match piece {
+            TemplatePiece::Literal(text) => rendered.push_str(text),
+            TemplatePiece::Variable(name) if name == SOURCE_TAB_VARIABLE => {
+                rendered.push_str(source_tab)
+            }
+            TemplatePiece::Variable(name) => {
+                let value = bindings
+                    .integer(name)
+                    .ok_or_else(|| format!("variable {name:?} is not bound"))?;
+                let _ = write!(rendered, "{value}");
+            }
+        }
+    }
+    Ok(rendered)
+}
+
+/// A single-quoted word for `sh -lc`; the quote is the only character that can
+/// leave such a word, so closing and re-opening around an escaped one is enough.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// Judge a resolved name here, so a hostile or oversized `{tab}` refuses in the
+/// generator's voice rather than as a custom-state id further down.
+fn validate_tab_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("a tab name must not be empty".to_string());
+    }
+    if name.trim() != name {
+        return Err(format!(
+            "tab name {name:?} must not start or end with whitespace"
+        ));
+    }
+    if name.chars().count() > MAX_ID_CHARACTERS {
+        return Err(format!(
+            "tab name {name:?} exceeds {MAX_ID_CHARACTERS} characters"
+        ));
+    }
+    if name.chars().any(char::is_control) {
+        return Err(format!(
+            "tab name {name:?} must not contain control characters"
+        ));
+    }
+    Ok(())
+}
+
+/// Panes per row, larger rows last, for a tab of `geometry` under `floors`.
+pub fn plan_rows(
+    pane_count: usize,
+    geometry: TabGeometry,
+    floors: PaneFloors,
+) -> Result<Vec<usize>, String> {
+    if pane_count == 0 {
+        return Err("a tab must hold at least one pane".to_string());
+    }
+    let columns_per_pane = floors.min_pane_width.saturating_add(PANE_FRAME_COLUMNS);
+    let max_columns = geometry.columns / columns_per_pane.max(1);
+    if max_columns == 0 {
+        return Err(format!(
+            "a {pane_count}-pane layout does not fit: each pane needs {columns_per_pane} columns and the tab has {}",
+            geometry.columns
+        ));
+    }
+    let rows = pane_count.div_ceil(max_columns);
+    let content_rows = (geometry.rows / rows) as i64 - PANE_FRAME_ROWS as i64;
+    if content_rows < floors.min_pane_height as i64 {
+        return Err(format!(
+            "a {pane_count}-pane layout does not fit: {rows} rows leave {content_rows} rows per pane and the floor is {}",
+            floors.min_pane_height
+        ));
+    }
+    let base = pane_count / rows;
+    let larger = pane_count % rows;
+    Ok((0..rows)
+        .map(|row| base + usize::from(row >= rows - larger))
+        .collect())
+}
+
+fn build_layout(
+    tab: EmittedTab,
+    geometry: TabGeometry,
+    floors: PaneFloors,
+) -> Result<CustomLayout, String> {
+    let rows = plan_rows(tab.commands.len(), geometry, floors)?;
+    let mut commands = tab.commands.into_iter();
+    let grid = rows
+        .iter()
+        .map(|count| commands.by_ref().take(*count).collect())
+        .collect();
+    let layout = CustomLayout {
+        id: tab.name,
+        width: None,
+        height: None,
+        commands: CommandGrid::Rows(grid),
+    };
+    layout.validate()?;
+    Ok(layout)
+}
+
 fn parse_integer_token(token: &str) -> Result<i64, String> {
     token
         .parse::<i64>()
@@ -389,7 +717,7 @@ fn parse_generator(content: &str, source: &str) -> Result<LayoutGenerator, Strin
     let command = declarations
         .command
         .ok_or_else(|| "a generator file must declare a command".to_string())?;
-    let body = parse_body(&body_nodes, &mut declarations.scope, false)?;
+    let body = parse_tab_nodes(&body_nodes, &mut declarations.scope)?;
     Ok(LayoutGenerator {
         command,
         source: source.to_string(),
@@ -507,76 +835,92 @@ fn set_floor(slot: &mut Option<usize>, node: &KdlNode) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_body(
-    nodes: &[&KdlNode],
-    scope: &mut Scope,
-    inside_tab: bool,
-) -> Result<Vec<BodyNode>, String> {
-    let mut body = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        body.push(parse_body_node(node, scope, inside_tab)?);
-    }
-    Ok(body)
-}
-
-fn parse_body_node(
-    node: &KdlNode,
-    scope: &mut Scope,
-    inside_tab: bool,
-) -> Result<BodyNode, String> {
+/// Refuse an unknown node before anything else, so a misspelling is the message
+/// the user sees rather than whatever property check it happens to trip.
+fn begin_body_node<'a>(node: &'a KdlNode, scope: &Scope) -> Result<(&'a str, Condition), String> {
     let name = node.name().value();
     if !BODY_NODES.contains(&name) {
         return Err(format!("unknown node {name:?}"));
     }
     reject_unknown_properties(node)?;
-    let condition = parse_condition(node, scope)?;
-    match name {
-        "tab" => {
-            if inside_tab {
-                return Err("a tab node must not be nested inside another tab".to_string());
-            }
-            let name = match node_arguments(node).as_slice() {
-                [] => None,
-                [value] => Some(parse_template(expect_string(value, "a tab name")?, scope)?),
-                _ => return Err("a tab node takes at most one name argument".to_string()),
-            };
-            Ok(BodyNode::Tab {
-                name,
+    Ok((name, parse_condition(node, scope)?))
+}
+
+fn parse_tab_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<TabNode>, String> {
+    let mut body = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let (name, condition) = begin_body_node(node, scope)?;
+        body.push(match name {
+            "tab" => TabNode::Tab {
+                name: match node_arguments(node).as_slice() {
+                    [] => None,
+                    [value] => Some(parse_template(expect_string(value, "a tab name")?, scope)?),
+                    _ => return Err("a tab node takes at most one name argument".to_string()),
+                },
                 condition,
-                body: parse_body(&child_nodes(node), scope, true)?,
-            })
-        }
-        "pane" => {
-            if !inside_tab {
-                return Err("a pane node must be inside a tab".to_string());
+                body: parse_pane_nodes(&child_nodes(node), scope)?,
+            },
+            "each" => {
+                let (variable, range, body) = parse_each_node(node, scope, parse_tab_nodes)?;
+                TabNode::Each {
+                    variable,
+                    range,
+                    condition,
+                    body,
+                }
             }
-            reject_children(node)?;
-            let [value] = node_arguments(node)[..] else {
-                return Err("a pane node takes exactly one command argument".to_string());
-            };
-            Ok(BodyNode::Pane {
-                command: parse_template(expect_string(value, "a pane command")?, scope)?,
-                condition,
-            })
-        }
-        _ => {
-            if !node_arguments(node).is_empty() {
-                return Err("an each node takes no arguments".to_string());
-            }
-            let variable = required_property_string(node, "for")?;
-            let range = parse_range(required_property_string(node, "in")?, scope)?;
-            let depth = scope.depth();
-            scope.declare(variable, VariableKind::Integer)?;
-            let body = parse_body(&child_nodes(node), scope, inside_tab)?;
-            scope.unwind(depth);
-            Ok(BodyNode::Each {
-                variable: variable.to_string(),
-                range,
-                condition,
-                body,
-            })
-        }
+            _ => return Err("a pane node must be inside a tab".to_string()),
+        });
     }
+    Ok(body)
+}
+
+fn parse_pane_nodes(nodes: &[&KdlNode], scope: &mut Scope) -> Result<Vec<PaneNode>, String> {
+    let mut body = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let (name, condition) = begin_body_node(node, scope)?;
+        body.push(match name {
+            "pane" => {
+                reject_children(node)?;
+                let [value] = node_arguments(node)[..] else {
+                    return Err("a pane node takes exactly one command argument".to_string());
+                };
+                PaneNode::Pane {
+                    command: parse_template(expect_string(value, "a pane command")?, scope)?,
+                    condition,
+                }
+            }
+            "each" => {
+                let (variable, range, body) = parse_each_node(node, scope, parse_pane_nodes)?;
+                PaneNode::Each {
+                    variable,
+                    range,
+                    condition,
+                    body,
+                }
+            }
+            _ => return Err("a tab node must not be nested inside another tab".to_string()),
+        });
+    }
+    Ok(body)
+}
+
+/// The loop variable is in scope only for the block, and never for its own range.
+fn parse_each_node<T>(
+    node: &KdlNode,
+    scope: &mut Scope,
+    parse_body: fn(&[&KdlNode], &mut Scope) -> Result<Vec<T>, String>,
+) -> Result<(String, Range, Vec<T>), String> {
+    if !node_arguments(node).is_empty() {
+        return Err("an each node takes no arguments".to_string());
+    }
+    let variable = required_property_string(node, "for")?;
+    let range = parse_range(required_property_string(node, "in")?, scope)?;
+    let depth = scope.depth();
+    scope.declare(variable, VariableKind::Integer)?;
+    let body = parse_body(&child_nodes(node), scope)?;
+    scope.unwind(depth);
+    Ok((variable.to_string(), range, body))
 }
 
 fn parse_condition(node: &KdlNode, scope: &Scope) -> Result<Condition, String> {
@@ -616,6 +960,7 @@ fn parse_range(raw: &str, scope: &Scope) -> Result<Range, String> {
         None => (false, rest),
     };
     Ok(Range {
+        text: raw.to_string(),
         start: parse_endpoint(&raw[..separator], scope)?,
         end: parse_endpoint(end, scope)?,
         inclusive,
