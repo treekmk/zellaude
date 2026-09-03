@@ -76,7 +76,7 @@ Add one or more named states to `~/.config/zellij/plugins/zellaude.json`:
 }
 ```
 
-Zellaude re-reads this file, and every generator file, each time the prompt opens, so an edit applies to the next `Ctrl+t`, `Shift+n` without reloading the plugin or restarting the session. Press `Ctrl+t`, `Shift+n`, type the state ID, and press `Enter`. Zellaude opens a new tab with the configured grid, mapping the command array to panes from left to right, top to bottom. Press `Esc` or `Ctrl+c` to cancel the prompt.
+Zellaude re-reads this file, and every generator file, when the prompt opens and again on every Enter, so an edit applies to the next submit without reloading the plugin or restarting the session. A refusal leaves the prompt open with what you typed, so you can fix the file it names and press Enter again. Press `Ctrl+t`, `Shift+n`, type the state ID, and press `Enter`. Zellaude opens a new tab with the configured grid, mapping the command array to panes from left to right, top to bottom. Press `Esc` or `Ctrl+c` to cancel the prompt.
 
 The new tab repeats the bars of the tab it was opened from — Zellaude above the grid, Zellij's status bar below it. Zellij parses a plugin-created layout on its own, so a generated tab never inherits `default_tab_template`; anything the layout leaves out is simply missing from that tab.
 
@@ -112,7 +112,7 @@ Zellaude installs `Shift+n` in Tab mode for the running client without changing 
 
 ### Generators
 
-A generator turns one prompt line into a whole layout. Put one KDL file per generator in `~/.config/zellij/plugins/zellaude/generators/`; the first word of the line picks the file and the rest are its arguments. Files are re-read every time the prompt opens, so a new generator works without restarting anything.
+A generator turns one prompt line into a whole layout. Put one KDL file per generator in `~/.config/zellij/plugins/zellaude/generators/`; the first word of the line picks the file and the rest are its arguments. Files are re-read when the prompt opens and again on Enter, so a new generator works without restarting anything, and an edit lands on the very next submit.
 
 `~/.config/zellij/plugins/zellaude/generators/madev.kdl`:
 
