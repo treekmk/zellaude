@@ -191,7 +191,12 @@ referenced flags may wrap — they are read, not executed.
     `temp_dir()`, so the count is attributable to this session alone and the
     throwaway never appears in the user's `zellij list-sessions`. Every command
     targeting it needs the same `TMPDIR`. **Pass: the base run emits at least
-    one such line and the fixed run emits zero.** The two halves are different
+    one such line and the fixed run emits zero.** Report both counts as numbers,
+    not as a verdict: the pair is the feature's central evidence — the only
+    direct demonstration that the freeze mechanism is gone — and a base of 1
+    versus a base of 5 also says how discriminating the box was that day, before
+    anyone reads a single clean run as proof. Both numbers belong in the review
+    guide and the PR text. The two halves are different
     kinds of claim, and the difference is the point. `fixed == 0` is
     **structural**: there were exactly three call sites — `src/attach.rs:63` and
     `:70` plus `src/main.rs:512`, as they stood before T4 — and this change
@@ -278,18 +283,49 @@ referenced flags may wrap — they are read, not executed.
     predates this change. So bound the walk in a *second* invocation with
     `ZELLAUDE_ATTACH_HOOK` pointed at a no-op stub, which removes the subprocess
     cost and leaves the `/proc` pass.
-    **Bound it per process, not as a flat second:** the run must average **under
-    1 ms per process seen**, and both the elapsed time and the process count go
-    in the artifacts so the figure can be re-derived. A flat 1 s stops
-    discriminating below ~26 processes — the batched pass costs 0.051 ms/process
-    (39 ms / 765) against the forbidden read loop's 38.45 ms/process
-    (20.3 s / 528), so a read loop crosses one second at 26 — and the bound's
-    validity would then be a property of the box, not the code. Per-process,
-    the measured 0.051 ms keeps ~20x margin and a read loop fails by ~38x at any
-    size. Without this bound nothing anywhere asserts the batched-pass rule:
+    **Bound it with three terms, one per cost the run actually carries:**
+    `elapsed < 500 ms + 1 ms x processes_seen + 200 ms x candidates_seen`.
+    Record all three counts in the artifacts so the figure can be re-derived.
+    Each term is calibrated on a measurement, and conflating them is what made
+    the first version of this bound fail correct code:
+    - **1 ms x processes** guards the batched-pass rule. Measured 0.051
+      ms/process (39 ms / 765); the forbidden read loop costs 38.45 ms/process
+      (20.3 s / 528). ~20x headroom, and a read loop overshoots this term alone
+      by ~38x.
+    - **200 ms x candidates** covers the per-candidate `discover_*` work that
+      the stub *forces to completion* — see the note below. Measured ~81 ms per
+      candidate, so ~2.5x headroom. This term scales with agents, not with
+      `/proc`, which is why it cannot be folded into the per-process term.
+    - **500 ms fixed** covers `--restore` (~136 ms) and process startup, which
+      do not scale at all. Without it a per-process bound false-fails on a small
+      box, where a fixed cost dominates.
+    A flat per-process bound was wrong twice over: at 1 ms/process it gives
+    **0.9x** margin against the real composition (817 ms measured over 755
+    processes with 9 candidates) and fails correct code, which is what T7 caught;
+    and raised to a flat 5 ms/process it false-fails at ~100 processes while
+    still passing there for the wrong reason. The three-term form gives ~3.7x
+    margin on the measured run and still catches a read loop by ~10x.
+    Without this bound nothing anywhere asserts the batched-pass rule:
     `tests/attach_detection.sh` runs against a fake `PROC_ROOT` of a handful of
     processes, where a read loop is invisible, and recording elapsed time in
     artifacts makes a regression visible but catches nothing.
+
+    **Only the 1 ms/process term is frozen.** It is the sole enforcement anywhere
+    of the batched-pass rule, so it must never be raised — raising it is how that
+    rule gets quietly disabled. The 500 ms fixed and 200 ms/candidate terms
+    bracket costs this feature does not own and may be recalibrated on evidence.
+    This replaces the earlier blanket "do not correct the bound", which was
+    ambiguous across three numbers.
+    **Record the decomposition, not just the total** — walk elapsed, processes
+    seen, candidates seen, stub spawns. A breach must be **attributed to a term**
+    before it is treated as a walk regression: a false-fail from the candidate
+    term looks identical to a real one from the process term, and the reflex fix
+    for an unattributed breach is to raise a number.
+    Isolating the walk instead — stubbing against a session name no process
+    carries, giving the full `/proc` pass with zero candidates — was considered
+    and rejected: with no candidates there is no `--inspect`, so it loses the
+    marker proving the walk ran and the `chmod` trap returns. Candidates are the
+    price of proving the walk happened.
     **The stub must be executable, and the run must prove it walked.**
     `[ -x "$HOOK_PATH" ] || exit 0` is line 15, so a stub without `chmod +x`
     makes the script exit 0 immediately: the bound passes trivially, no rows are
