@@ -111,11 +111,21 @@ Context keys shrink to `type`, `pane_ids`, `scan_started_ms`; `pane_leaders` and
 `client`, `ts_ms`).
 
 Three load-bearing rules:
-- **Single batched pass** — for the walk. One `grep -z` (or equivalent) over the
-  environ files, not a per-process shell read loop: 22 ms versus 20.3 s, because
-  bash falls back to one-byte reads on unseekable `/proc` files. This does *not*
-  govern the validator, where N is one session's cached entries and the safety
-  rule reads per-pid; a per-entry `ps` there is correct.
+- **No process is read individually by the shell** — for the walk. The paths go
+  to a batching tool in bulk, and the number of tool invocations scales with
+  chunks, not with processes: 22 ms versus 20.3 s, because bash falls back to
+  one-byte reads on unseekable `/proc` files. Stated this way rather than as "one
+  `grep`", because `xargs` chunking is several invocations and plainly complies
+  while a `while read` loop is one construct and plainly does not — counting
+  invocations gets that backwards. A clean shape: `printf '%s\0' "$PROC_ROOT"/*/comm
+  | xargs -0 grep ...` keeps the glob inside a shell **builtin**, which never
+  execs and so is not subject to `ARG_MAX` at all; only `xargs` chunks the exec.
+  **The rule governs work that scales with `/proc`, not work that scales with
+  candidates.** So the per-candidate `comm` reads in `discover_codex` and
+  `discover_claude` are outside it, as is the validator, where N is one session's
+  cached entries and the safety rule reads per-pid; a per-entry `ps` there is
+  correct. The wording is guidance — the frozen per-process timing term is what
+  actually catches a loop.
 - **Drop only on positive evidence.** The naive `[ -z "$out" ]` is the trap: `ps
   -o comm= -p` prints nothing both when the pid is gone (exit 1) and when `ps`
   could not run (exit 127), and a transient failure hits every cached entry in

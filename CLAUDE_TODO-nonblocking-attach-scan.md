@@ -26,7 +26,9 @@ Critics: plan=1 impl=1
 | T5 | impl3 | Merge from the integration branch: the moment deps clear — no gate — merge `develop` into the feature branch, resolving conflicts with best judgment. Expect friction in `README.md` and `tests/hook_mode_detection.sh`, both edited on either side. An extra merge loop appends fresh rows — this one never re-runs. Protocol: `madev-impl` Finalization. | T3, T4 | [x] |
 | T6 | impl3 | Compact-comments pass over the touched files per the session's coding standards: default none, terse WHY only; light touch-ups, no behavior change; remove resolved CLAUDE notes; commit. | T5 | [x] |
 | T7 | impl3 | Run the PLAN's Verification on the merged + tidied state, E2E included — both legs, preflight first, artifacts to `/tmp/nonblocking-attach-scan/`. Re-run `tests/hook_mode_detection.sh` after the merge rather than trusting any pre-merge green. On failure or a non-discriminating base arm, report to the planner and wait — never self-fix, never make room. | T6 | [x] |
-| T8 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T7 | (Not possible to mark after deletion) |
+| T9 | impl1 | Stop the walk putting one argument per process on the command line. Both greps in `list_pane_processes` glob-expand — `"$PROC_ROOT"/*/comm` and `"$PROC_ROOT"/*/environ`. Measured ceiling ~110,376 processes at `ARG_MAX` 2 MB (~19 bytes/arg); past it `grep -s` suppresses the error, so discovery yields nothing with no complaint. The batched-pass rule still governs: batching through `xargs` is fine — it chunks to `ARG_MAX` and stays a handful of invocations, not one per process — a per-process loop is not. Coverage: no fixture reaches 110k processes, so a test that merely runs the new code asserts nothing about argv length. What is testable is **behavioural identity** — every existing `tests/attach_detection.sh` case passes with the **fixtures unmodified**. Adjusting a fixture to suit the new form destroys the guard; if a case needs changing, report it rather than change it. If the implementation exposes a chunk size, additionally force more than one chunk at fixture scale so the multi-invocation path executes rather than being assumed. | — | [ ] |
+| T10 | impl3 | Re-run the PLAN's Verification on the fixed tree: all suites, both E2E legs, the per-term timing assertions. Report Leg A's two counts as numbers. Same rules as T7 — report and wait on failure, never self-fix. | T9 | [ ] |
+| T8 | impl3 | Archive on the planner's explicit go: clear leftover feature CLAUDE notes, append the History entry, delete/prune this feature's in-flight seed, `git rm` the PLAN+TODO pair (`[archive]`), `macoord cleanup`. Protocol: `madev-impl` Finalization. | T10 | (Not possible to mark after deletion) |
 
 **Dependency graph**
 
@@ -38,10 +40,14 @@ graph TD
   T4[T4 · impl2 · plugin] --> T5
   T5 --> T6[T6 · impl3 · compact-comments]
   T6 --> T7[T7 · impl3 · verify]
-  T7 --> T8[T8 · impl3 · archive]
+  T7 --> T9[T9 · impl1 · bound the argv list]
+  T9 --> T10[T10 · impl3 · re-verify]
+  T10 --> T8[T8 · impl3 · archive]
 ```
 
 **Launch order** — open every session at once; blocked ones idle on `wait-for`.
 - `impl1` — entry T1 (—) · `impl1-crit1`
 - `impl2` — entry T4 (—) · `impl2-crit1`
 - `impl3` — entry T5 (waits on T3, T4) · `impl3-crit1`
+- Reopened after checkpoint 5: `impl1` takes T9 (ready now), `impl3` takes
+  T10 (waits on T9). Archival T8 now waits on T10.
