@@ -286,19 +286,44 @@ referenced flags may wrap — they are read, not executed.
     **Bound it with three terms, one per cost the run actually carries:**
     **assert each term separately, never their sum**, where `spawn_ms` is a bare
     subprocess spawn timed **in the same run**:
-    `walk_elapsed / processes_seen < 1 ms` **and**
-    `discover_elapsed / candidates_seen < 50 x spawn_ms` **and**
-    `fixed_elapsed < 500 ms`.
-    A summed budget does not enforce the frozen term. One assertion on one number
-    means a walk regression that keeps the total under budget never breaches, so
-    the attribution rule never runs and nothing is attributed: at the loaded
-    measurement the walk came in at ~194 ms against a 574 ms allowance, so
-    tripling it to a clear breach still lands the total far under budget and
-    passes silently. A load-relative candidate term makes that worse, not better
-    — the room a walk regression can hide in grows with the box's slowness,
-    exactly when it is hardest to see. Asserting per term makes a breach name
-    itself, which is what rev 3's decomposition was reaching for: it stops being
-    a post-hoc forensic step and becomes the assertion.
+    `elapsed_nocandidate < 500 ms + 1 ms x processes_seen` **and**
+    `discover_elapsed / candidates_seen < 50 x spawn_ms`.
+    **Every quantity comes from the shipped script; nothing is transcribed.**
+    `elapsed_real` is the script under the stub hook against the live session;
+    `elapsed_nocandidate` is the same script and stub against a session name no
+    process carries, so the identical walk runs and yields zero candidates,
+    leaving startup plus `--restore` plus the walk; `discover_elapsed` is their
+    difference, which cancels both. Do **not** time the walk by re-executing a
+    copy of the pipeline: a transcription is not kept in step with
+    `list_pane_processes`, so changing the shipped walk to a read loop while
+    leaving the copy alone would pass the sole enforcement of the batched-pass
+    rule. That trap was live in the first implementation of this leg and was
+    caught only because the implementer flagged the lift.
+    The price of measuring the shipped path is that the walk is folded with the
+    fixed cost, so a *subtle* walk regression can hide inside the 500 ms
+    allowance. Accepted deliberately: this term exists to catch a per-process
+    read loop, which at ~38 ms/process is roughly 300x the measured walk and
+    overshoots the allowance by more than an order of magnitude at any realistic
+    process count. Catching drift is not its job; catching the rule's violation
+    is, and it does that against code that actually ships.
+    **Why the candidate term is separate and walk-plus-fixed is not.** These are
+    two different judgements, not one rule applied twice. The candidate term is
+    kept out of the walk assertion because its slack is load-relative: at
+    9 candidates it ran from ~1.9 s on a quiet box to ~9.1 s under load, so
+    folding it in would give a walk regression room to hide that *grows* with the
+    box's slowness — most generous exactly when a regression is hardest to see.
+    Walk and fixed are merged despite the same objection in miniature, because
+    the alternative is timing a transcription: the 500 ms they share is fixed and
+    small, it does not grow with anything, and measuring the shipped path is
+    worth more than resolving between two costs the term does not need to tell
+    apart. The trade above states what that concedes.
+    A breach therefore still names itself between the two assertions, which is
+    what rev 3's decomposition was reaching for: attribution stops being a
+    post-hoc forensic step and becomes the assertion. Separating walk from fixed
+    is available without a transcription if it is ever wanted — the same script
+    against an empty `PROC_ROOT` gives startup plus `--restore` with a walk that
+    scans nothing — but that is a third invocation to resolve something this term
+    is not for.
     Record all three counts in the artifacts so the figure can be re-derived.
     Each term is calibrated on a measurement, and conflating them is what made
     the first version of this bound fail correct code:
@@ -354,11 +379,14 @@ referenced flags may wrap — they are read, not executed.
     before it is treated as a walk regression: a false-fail from the candidate
     term looks identical to a real one from the process term, and the reflex fix
     for an unattributed breach is to raise a number.
-    Isolating the walk instead — stubbing against a session name no process
-    carries, giving the full `/proc` pass with zero candidates — was considered
-    and rejected: with no candidates there is no `--inspect`, so it loses the
-    marker proving the walk ran and the `chmod` trap returns. Candidates are the
-    price of proving the walk happened.
+    Isolating the walk by stubbing against a session name no process carries —
+    the full `/proc` pass with zero candidates — is rejected as a **replacement**
+    and adopted as a **component**. As a replacement it fails: with no candidates
+    there is no `--inspect`, so it loses the marker proving the walk ran and the
+    `chmod` trap returns. Paired with a real run that supplies the marker it is
+    exactly right, and their difference gives the candidate cost while cancelling
+    startup and walk. That pairing is what the assertions above are built on, and
+    it is better than either half alone — the run found it, this plan did not.
     **The stub must be executable, and the run must prove it walked.**
     `[ -x "$HOOK_PATH" ] || exit 0` is line 15, so a stub without `chmod +x`
     makes the script exit 0 immediately: the bound passes trivially, no rows are
@@ -384,6 +412,10 @@ referenced flags may wrap — they are read, not executed.
     ~1.99 TB free RAM. Two real go conditions: `zellij` on PATH, throwaway
     session name unused (`zellij list-sessions`). Not met → report, do not make
     room.
+  - **Artifacts must outlive `/tmp`.** Anything checkpoints 5 and 6 depend on —
+    Leg A's two counts above all — goes into the review guide and the PR text as
+    it is produced, not left in a scratch directory. A `/tmp` wipe destroyed this
+    run's first Leg A artifacts mid-run and the evidence had to be re-made.
   - **Artifacts:** `/tmp/nonblocking-attach-scan/` — layout, isolated
     `XDG_CACHE_HOME`, samples, timings. Never in the repo, never staged. Leg A
     also leaves state outside `/tmp`: the plugin writes
