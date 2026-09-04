@@ -284,7 +284,21 @@ referenced flags may wrap — they are read, not executed.
     `ZELLAUDE_ATTACH_HOOK` pointed at a no-op stub, which removes the subprocess
     cost and leaves the `/proc` pass.
     **Bound it with three terms, one per cost the run actually carries:**
-    `elapsed < 500 ms + 1 ms x processes_seen + 200 ms x candidates_seen`.
+    **assert each term separately, never their sum**, where `spawn_ms` is a bare
+    subprocess spawn timed **in the same run**:
+    `walk_elapsed / processes_seen < 1 ms` **and**
+    `discover_elapsed / candidates_seen < 50 x spawn_ms` **and**
+    `fixed_elapsed < 500 ms`.
+    A summed budget does not enforce the frozen term. One assertion on one number
+    means a walk regression that keeps the total under budget never breaches, so
+    the attribution rule never runs and nothing is attributed: at the loaded
+    measurement the walk came in at ~194 ms against a 574 ms allowance, so
+    tripling it to a clear breach still lands the total far under budget and
+    passes silently. A load-relative candidate term makes that worse, not better
+    — the room a walk regression can hide in grows with the box's slowness,
+    exactly when it is hardest to see. Asserting per term makes a breach name
+    itself, which is what rev 3's decomposition was reaching for: it stops being
+    a post-hoc forensic step and becomes the assertion.
     Record all three counts in the artifacts so the figure can be re-derived.
     Each term is calibrated on a measurement, and conflating them is what made
     the first version of this bound fail correct code:
@@ -292,10 +306,28 @@ referenced flags may wrap — they are read, not executed.
       ms/process (39 ms / 765); the forbidden read loop costs 38.45 ms/process
       (20.3 s / 528). ~20x headroom, and a read loop overshoots this term alone
       by ~38x.
-    - **200 ms x candidates** covers the per-candidate `discover_*` work that
-      the stub *forces to completion* — see the note below. Measured ~81 ms per
-      candidate, so ~2.5x headroom. This term scales with agents, not with
-      `/proc`, which is why it cannot be folded into the per-process term.
+    - **50 x spawn_ms x candidates** covers the per-candidate `discover_*` work
+      that the stub *forces to completion* — see the note below. It is expressed
+      against an in-run control rather than an absolute figure because that work
+      is dominated by subprocess spawns, and spawn cost tracks box load. Measured
+      twice ~17 h apart across a ~5x box-wide slowdown, the ratio held: 81 ms per
+      candidate against 4.18 ms per spawn (19.4x) on a quiet box of 755
+      processes, 444.5 against 20.18 (22.0x) on a box of 574 processes under load
+      average 62 on 288 cores. Every figure here carries the process count it was
+      taken at, because mixing counts between regimes makes the arithmetic
+      irreproducible. The 50x allowance keeps
+      ~2.5x headroom over that ratio at either load. An absolute 200 ms term
+      false-failed under the slowdown at 0.63-0.73x of budget while the frozen
+      term stayed within — this replaces it. The term scales with agents and with
+      load, not with `/proc`, which is why it cannot be folded into the
+      per-process term. The pairing is deliberate rather than convenient:
+      `spawn_ms` normalizes a subprocess-bound term with a subprocess-bound
+      control, while the walk is I/O over `/proc` and its term stays absolute. Do
+      not "improve" this by normalizing the process term too — a load-relative
+      walk bound drifts with the box, which is what the frozen term exists to
+      prevent. The slowdown that motivated this was uniform across walk,
+      candidate and spawn, which made spawn a fair proxy on that occasion; that
+      uniformity is a property of the incident, not a guarantee.
     - **500 ms fixed** covers `--restore` (~136 ms) and process startup, which
       do not scale at all. Without it a per-process bound false-fails on a small
       box, where a fixed cost dominates.
@@ -317,7 +349,8 @@ referenced flags may wrap — they are read, not executed.
     This replaces the earlier blanket "do not correct the bound", which was
     ambiguous across three numbers.
     **Record the decomposition, not just the total** — walk elapsed, processes
-    seen, candidates seen, stub spawns. A breach must be **attributed to a term**
+    seen, candidates seen, stub spawns and the per-spawn cost the candidate term
+    is calibrated against. A breach must be **attributed to a term**
     before it is treated as a walk regression: a false-fail from the candidate
     term looks identical to a real one from the process term, and the reflex fix
     for an unattributed breach is to raise a number.
