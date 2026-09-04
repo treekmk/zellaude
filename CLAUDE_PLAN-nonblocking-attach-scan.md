@@ -122,8 +122,15 @@ Three load-bearing rules:
   execs and so is not subject to `ARG_MAX` at all; only `xargs` chunks the exec.
   **Two thresholds, true of different code — label them.** ~110,376 processes is
   where the *defect* bit: one argument per process against `ARG_MAX` 2,097,152 at
-  ~19 bytes each, past which `grep -s` swallowed the error and discovery yielded
-  nothing silently. That is why T9 exists; it is not a property of what ships.
+  ~19 bytes each, past which `execve` fails outright with `E2BIG`, `grep` never
+  starts, and discovery yields nothing — silently *in production*, where the
+  plugin discards the stderr bash writes. Measured: pre-T9 against a 6001-entry
+  proc root, exit 0, zero rows, and two `Argument list too long` lines from bash;
+  post-T9, no stderr and discovery works. **`-s` is not the mechanism** — it
+  suppresses messages about missing or unreadable *files*, and grep never runs at
+  all here. That misreading has surfaced three times in this run, and each time it
+  points a reader at "just drop `-s`" as the fix, which concludes the `xargs`
+  shape was never needed. That is why T9 exists; it is not a property of what ships.
   The *shipped* path chunks from roughly **7,280 processes for `comm` and 6,240
   for `environ`**, set by `xargs`'s 131,072-byte buffer. The second pair carries
   something the first does not: above about seven thousand processes the
