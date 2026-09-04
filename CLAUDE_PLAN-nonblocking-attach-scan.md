@@ -122,7 +122,8 @@ Three load-bearing rules:
   execs and so is not subject to `ARG_MAX` at all; only `xargs` chunks the exec.
   **Two thresholds, true of different code — label them.** ~110,376 processes is
   where the *defect* bit: one argument per process against `ARG_MAX` 2,097,152 at
-  ~19 bytes each, past which `execve` fails outright with `E2BIG`, `grep` never
+  ~19 bytes each including the NUL separator, past which `execve` fails outright
+  with `E2BIG`, `grep` never
   starts, and discovery yields nothing — silently *in production*, where the
   plugin discards the stderr bash writes. Measured: pre-T9 against a 6001-entry
   proc root, exit 0, zero rows, and two `Argument list too long` lines from bash;
@@ -131,9 +132,14 @@ Three load-bearing rules:
   all here. That misreading has surfaced three times in this run, and each time it
   points a reader at "just drop `-s`" as the fix, which concludes the `xargs`
   shape was never needed. That is why T9 exists; it is not a property of what ships.
-  The *shipped* path chunks from roughly **7,280 processes for `comm` and 6,240
-  for `environ`**, set by `xargs`'s 131,072-byte buffer. The second pair carries
-  something the first does not: above about seven thousand processes the
+  The *shipped* path chunks from roughly **6,900 processes for `comm` and 6,000
+  for `environ`**, set by `xargs`'s own 131,072-byte command buffer — not
+  `ARG_MAX`, and ~16x smaller than it. Measured rather than derived: the first
+  chunk holds 6,898 and 5,957 arguments, i.e. exactly 19.00 and 22.00 bytes each,
+  so `xargs` accounts an argument at path+NUL — the same convention the ceiling
+  uses. Reproduce with
+  `seq -f '/proc/%07g/comm' 1 40000 | tr '\n' '\0' | xargs -0 /bin/echo | head -1 | wc -w`. The second pair carries
+  something the first does not: above about six thousand processes the
   multi-invocation path is ordinary operation on a busy box rather than a
   test-only branch, and it stays O(chunks), so the rule holds.
   `ZELLAUDE_PROC_SCAN_MAX_ARGS` is a shipped runtime path, not only scaffolding:
