@@ -155,7 +155,9 @@ emit_cached_states
 # is read individually: 20.3 s against 22 ms for 528 processes.
 list_pane_processes() {
   local chunk=()
-  # Test hook: forces more than one xargs invocation at fixture scale.
+  # Chunk size, set by tests to force more than one xargs invocation at fixture
+  # scale. Not harmless tuning: at 1 the walk becomes one exec per file, the
+  # shape it exists to avoid.
   [ -z "${ZELLAUDE_PROC_SCAN_MAX_ARGS:-}" ] ||
     chunk=(-n "$ZELLAUDE_PROC_SCAN_MAX_ARGS")
   {
