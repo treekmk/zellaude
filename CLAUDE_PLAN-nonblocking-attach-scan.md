@@ -120,6 +120,18 @@ Three load-bearing rules:
   invocations gets that backwards. A clean shape: `printf '%s\0' "$PROC_ROOT"/*/comm
   | xargs -0 grep ...` keeps the glob inside a shell **builtin**, which never
   execs and so is not subject to `ARG_MAX` at all; only `xargs` chunks the exec.
+  **Two thresholds, true of different code — label them.** ~110,376 processes is
+  where the *defect* bit: one argument per process against `ARG_MAX` 2,097,152 at
+  ~19 bytes each, past which `grep -s` swallowed the error and discovery yielded
+  nothing silently. That is why T9 exists; it is not a property of what ships.
+  The *shipped* path chunks from roughly **7,280 processes for `comm` and 6,240
+  for `environ`**, set by `xargs`'s 131,072-byte buffer. The second pair carries
+  something the first does not: above about seven thousand processes the
+  multi-invocation path is ordinary operation on a busy box rather than a
+  test-only branch, and it stays O(chunks), so the rule holds.
+  `ZELLAUDE_PROC_SCAN_MAX_ARGS` is a shipped runtime path, not only scaffolding:
+  a low value defeats the rule this section states — at 1 the walk becomes one
+  exec per file, exactly the shape forbidden — so it is not harmless tuning.
   **The rule governs work that scales with `/proc`, not work that scales with
   candidates.** So the per-candidate `comm` reads in `discover_codex` and
   `discover_claude` are outside it, as is the validator, where N is one session's
