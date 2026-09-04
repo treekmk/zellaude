@@ -383,6 +383,33 @@ printf '%s\n' "$OUTPUT" |
     )
   ' >/dev/null
 
+# Chunking must not change what the walk sees. At one file per invocation the
+# only thing keeping a filename on each grep line is -H, and without it the awk
+# never gets a pid. The grep count is compared rather than thresholded because a
+# knob that silently stopped chunking would leave this comparing two identical
+# runs — the count is what proves the multi-invocation path ran at all.
+REAL_GREP=$(command -v grep)
+GREP_COUNT_BIN="$TEST_DIR/grep-count-bin"
+GREP_COUNT_LOG="$TEST_DIR/grep-count.log"
+mkdir -p "$GREP_COUNT_BIN"
+cat > "$GREP_COUNT_BIN/grep" <<COUNTING_GREP
+#!/usr/bin/env bash
+printf 'x\n' >> "$GREP_COUNT_LOG"
+exec "$REAL_GREP" "\$@"
+COUNTING_GREP
+chmod +x "$GREP_COUNT_BIN/grep"
+
+: > "$GREP_COUNT_LOG"
+UNCHUNKED_OUTPUT=$(PATH="$GREP_COUNT_BIN:$PATH" run_attach "$PROC_ROOT")
+UNCHUNKED_GREPS=$(wc -l < "$GREP_COUNT_LOG")
+: > "$GREP_COUNT_LOG"
+export ZELLAUDE_PROC_SCAN_MAX_ARGS=1
+CHUNKED_OUTPUT=$(PATH="$GREP_COUNT_BIN:$PATH" run_attach "$PROC_ROOT")
+unset ZELLAUDE_PROC_SCAN_MAX_ARGS
+CHUNKED_GREPS=$(wc -l < "$GREP_COUNT_LOG")
+[ "$CHUNKED_GREPS" -gt "$UNCHUNKED_GREPS" ]
+[ "$CHUNKED_OUTPUT" = "$UNCHUNKED_OUTPUT" ]
+
 # Run with the empty proc root so nothing is discovered and the only rows are
 # cached ones, and with a fake ps on PATH. The hook exits on --restore before it
 # reads any process, so the stub answers the validator alone.

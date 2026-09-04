@@ -148,14 +148,23 @@ emit_cached_states
 [ -d "$PROC_ROOT" ] || exit 0
 
 # Every claude/codex process of this session, as "pane_id<TAB>pid<TAB>client",
-# ascending by pane then pid. Two batched greps, never a per-process read loop:
-# bash falls back to one-byte reads on unseekable /proc files, which costs 20.3 s
-# where this costs 22 ms for 528 processes.
+# ascending by pane then pid. printf is a builtin, so the globs never reach an
+# exec: past ARG_MAX execve fails outright, grep never starts, and discovery
+# returns nothing — silently, since the plugin discards the stderr bash writes.
+# -s covers unreadable entries, not that. xargs chunks the exec, and no process
+# is read individually: 20.3 s against 22 ms for 528 processes.
 list_pane_processes() {
+  local chunk=()
+  # Test hook: forces more than one xargs invocation at fixture scale.
+  [ -z "${ZELLAUDE_PROC_SCAN_MAX_ARGS:-}" ] ||
+    chunk=(-n "$ZELLAUDE_PROC_SCAN_MAX_ARGS")
   {
-    grep -sxH -e claude -e codex "$PROC_ROOT"/*/comm
-    grep -szH -e '^ZELLIJ_SESSION_NAME=' -e '^ZELLIJ_PANE_ID=' \
-      "$PROC_ROOT"/*/environ | tr '\0' '\n'
+    printf '%s\0' "$PROC_ROOT"/*/comm |
+      xargs -0 "${chunk[@]}" grep -sxH -e claude -e codex
+    printf '%s\0' "$PROC_ROOT"/*/environ |
+      xargs -0 "${chunk[@]}" grep -szH \
+        -e '^ZELLIJ_SESSION_NAME=' -e '^ZELLIJ_PANE_ID=' |
+      tr '\0' '\n'
   } | awk -v session="$SESSION_NAME" '
     {
       separator = index($0, ":")
