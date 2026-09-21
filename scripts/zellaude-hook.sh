@@ -1200,7 +1200,9 @@ fi
 # up forever. Hand-rolled instead of timeout(1), which stock macOS lacks.
 zellij pipe --name "zellaude" -- "$PAYLOAD" >/dev/null 2>&1 &
 PIPE_PID=$!
-( sleep 10; kill "$PIPE_PID" 2>/dev/null ) &
+# Stay within the 3-second Codex hook deadline. Detach watchdog stdio so
+# its sleep cannot hold the hook output pipes open after Zellij returns.
+( sleep 1; kill "$PIPE_PID" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
 WATCHDOG_PID=$!
 wait "$PIPE_PID" 2>/dev/null || true
 kill "$WATCHDOG_PID" 2>/dev/null || true
