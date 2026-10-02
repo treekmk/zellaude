@@ -127,21 +127,21 @@ min_pane_height 12
 
 tab "{tab}-impl" unless="single_tab only_crit" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i} '/madev-impl impl{i}'"
+        pane "claude -n impl{i} '/madev:impl impl{i}'"
     }
 }
 each for="k" in="from..from+m" {
     tab "{tab}-crit{k}" unless="single_tab" {
         each for="i" in="1..=n" {
-            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
+            pane "claude -n impl{i}-crit{k} '/madev:impl-crit impl{i}-crit{k}'"
         }
     }
 }
 tab if="single_tab" {
     each for="i" in="1..=n" {
-        pane "claude -n impl{i} '/madev-impl impl{i}'" unless="only_crit"
+        pane "claude -n impl{i} '/madev:impl impl{i}'" unless="only_crit"
         each for="k" in="from..from+m" {
-            pane "claude -n impl{i}-crit{k} '/madev-impl-crit impl{i}-crit{k}'"
+            pane "claude -n impl{i}-crit{k} '/madev:impl-crit impl{i}-crit{k}'"
         }
     }
 }
@@ -188,7 +188,7 @@ A `tab` that ends up with no panes refuses, and so does a line that opens no tab
 
 `{name}` is replaced for the names a file declares, plus the built-in `{tab}` — the name of the tab the prompt was opened from. **Anything else in braces is left alone**, so `${HOME}` and `{a,b}` reach the shell untouched. That is also the one place the language stays quiet rather than refusing: a misspelt `{crti}` is passed through as text instead of reported.
 
-A string — `{tab}` or a declared one — goes into a tab name raw and into a command single-quoted, so nothing typed on the prompt line or held in a tab name can change how `sh -lc` parses the command around it. With `arg "feature" type="string"`, the line `impl auth` renders `pane "claude -n {feature} '/madev-impl {feature}'"` as `claude -n 'auth' '/madev-impl 'auth''`, and adjacent single-quoted pieces concatenate, so the program receives `auth` and then the one word `/madev-impl auth`. Put a string inside single quotes or none, not double quotes, where the quote marks would reach the program as text. Being text rather than a number, a string belongs only in templates: it cannot be tested by `if` or counted over in a range.
+A string — `{tab}` or a declared one — goes into a tab name raw and into a command single-quoted, so nothing typed on the prompt line or held in a tab name can change how `sh -lc` parses the command around it. With `arg "feature" type="string"`, the line `impl auth` renders `pane "claude -n {feature} '/madev:impl {feature}'"` as `claude -n 'auth' '/madev:impl 'auth''`, and adjacent single-quoted pieces concatenate, so the program receives `auth` and then the one word `/madev:impl auth`. Put a string inside single quotes or none, not double quotes, where the quote marks would reach the program as text. Being text rather than a number, a string belongs only in templates: it cannot be tested by `if` or counted over in a range.
 
 #### Pane size
 
